@@ -3,24 +3,113 @@
     "type": "function",
     "function": {
       "name": "read_file",
-      "description": "Read lines from a file. Returns lines prefixed with line numbers.",
+      "description": "Read lines from a file.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
-            "type": "string",
-            "description": "Absolute or relative path to the file."
+            "type": "string"
           },
           "offset": {
-            "type": "integer",
-            "description": "First line to read (1-indexed). Defaults to 1."
+            "type": "integer"
           },
           "limit": {
-            "type": "integer",
-            "description": "Maximum number of lines to return. Defaults to 200."
+            "type": "integer"
           }
         },
         "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_skills",
+      "description": "Discover available skills and their descriptions. Use this when you need to find a skill relevant to the current task.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_skill",
+      "description": "Load the full SKILL.md instructions for a selected skill. Use after discovering available skills.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "skill_name": {
+            "type": "string",
+            "description": "The exact Skill ID returned by list_skills."
+          }
+        },
+        "required": ["skill_name"],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_persona",
+      "description": "Retrieve an existing persona profile for a conversation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "persona_id": {
+            "type": "string"
+          }
+        },
+        "required": ["persona_id"],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_persona",
+      "description": "Store a relevant, explicitly shared or consented persona attribute.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "persona_id": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "enum": [
+              "goals",
+              "interests",
+              "priorities",
+              "preferences",
+              "pain_points",
+              "objections"
+            ]
+          },
+          "value": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "A brief reference to what the person explicitly shared."
+          }
+        },
+        "required": [
+          "persona_id",
+          "field",
+          "value",
+          "confidence",
+          "evidence"
+        ],
+        "additionalProperties": false
       }
     }
   }

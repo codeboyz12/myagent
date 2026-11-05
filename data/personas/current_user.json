@@ -1,0 +1,20 @@
+{
+  "goals": [
+    {
+      "value": "Find a new laptop around $2,000 for school use",
+      "confidence": "high",
+      "evidence": "User stated their budget is around $2,000 and the laptop is for school."
+    }
+  ],
+  "interests": [],
+  "priorities": [],
+  "preferences": [
+    {
+      "value": "Prefers a wide screen and values long battery life",
+      "confidence": "high",
+      "evidence": "User said they prefer a wide screen and would prefer long battery life."
+    }
+  ],
+  "pain_points": [],
+  "objections": []
+}
