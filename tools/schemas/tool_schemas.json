@@ -1,0 +1,27 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Read lines from a file. Returns lines prefixed with line numbers.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute or relative path to the file."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "First line to read (1-indexed). Defaults to 1."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of lines to return. Defaults to 200."
+          }
+        },
+        "required": ["path"]
+      }
+    }
+  }
+]

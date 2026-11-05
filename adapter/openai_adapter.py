@@ -10,16 +10,16 @@ class openAIAdapter(BaseLLMAdapter):
         )
         self.model=model
 
-    def generate(self, messages, tools=None, max_tonkens=512):
+    def generate(self, messages, tools=None, max_tokens=512):
         kwargs = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": max_tonkens
+            "max_tokens": max_tokens,
+            "tools": tools
         }
 
         completion = self.client.chat.completions.create(
             **kwargs
         )
 
-        response = completion.choices[0].message.content
-        return response
+        return completion.choices[0].message
