@@ -3,6 +3,7 @@
 import os
 
 import ai
+from ai.providers.openai import OpenAIChatCompletionsProtocol
 
 
 DEFAULT_MODEL = "qwen/qwen3.8-27b"
@@ -21,6 +22,10 @@ def create_model(model_id: str | None = None) -> ai.Model:
         "openai",
         base_url=os.getenv("GROQ_BASE_URL", DEFAULT_BASE_URL),
         api_key=api_key,
+        # OpenAI-compatible endpoints such as llama.cpp and Groq implement
+        # Chat Completions. The OpenAI provider name otherwise selects the
+        # newer Responses API, which can reject persisted multi-turn history.
+        protocol=OpenAIChatCompletionsProtocol(),
     )
     return ai.Model(
         id=model_id or os.getenv("GROQ_MODEL", DEFAULT_MODEL),

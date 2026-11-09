@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 
@@ -6,16 +7,36 @@ PROJECT_DIR = Path(__file__).resolve().parents[3]
 PERSONA_DIR = PROJECT_DIR / "data" / "personas"
 
 
-def get_persona(persona_id: str) -> str:
+def _persona_path(persona_id: str, persona_dir: Path) -> Path:
+    if (
+        not persona_id
+        or persona_id in {".", ".."}
+        or "/" in persona_id
+        or "\\" in persona_id
+    ):
+        raise ValueError("Invalid persona ID.")
+    resolved_dir = persona_dir.expanduser().resolve()
+    resolved_path = (resolved_dir / f"{persona_id}.json").resolve()
+    if not resolved_path.is_relative_to(resolved_dir):
+        raise ValueError("Persona path is outside the allowed directory.")
+    return resolved_path
+
+
+def get_persona(persona_id: str, *, persona_dir: Path = PERSONA_DIR) -> str:
     """
     Retrieve a persona profile.
     """
 
-    persona_path = PERSONA_DIR / f"{persona_id}.json"
+    try:
+        persona_path = _persona_path(persona_id, persona_dir)
+    except ValueError as error:
+        return f"Error: {error}"
 
     if not persona_path.is_file():
         return "No persona profile found."
 
+    os.chmod(persona_dir, 0o700)
+    os.chmod(persona_path, 0o600)
     with open(persona_path, "r", encoding="utf-8") as f:
         persona = json.load(f)
 
@@ -31,7 +52,9 @@ def update_persona(
     field: str,
     value: str,
     confidence: str,
-    evidence: str
+    evidence: str,
+    *,
+    persona_dir: Path = PERSONA_DIR,
 ) -> str:
     """
     Add or update a persona attribute.
@@ -58,9 +81,13 @@ def update_persona(
     if confidence not in allowed_confidence:
         return "Error: confidence must be high, medium, or low."
 
-    PERSONA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        persona_path = _persona_path(persona_id, persona_dir)
+    except ValueError as error:
+        return f"Error: {error}"
 
-    persona_path = PERSONA_DIR / f"{persona_id}.json"
+    persona_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(persona_dir, 0o700)
 
     # Load existing profile or initialize a new one.
     if persona_path.is_file():
@@ -90,7 +117,13 @@ def update_persona(
 
     persona[field].append(entry)
 
-    with open(persona_path, "w", encoding="utf-8") as f:
+    descriptor = os.open(
+        persona_path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    os.chmod(persona_path, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
         json.dump(
             persona,
             f,

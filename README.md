@@ -29,6 +29,7 @@ myagent/
 │       ├── __main__.py
 │       ├── adapter/
 │       ├── agents/
+│       ├── sessions/
 │       └── tools/
 │
 ├── skills/
@@ -209,6 +210,85 @@ cp .env.example .env
 
 `uv run` uses the project environment without requiring activation.
 
+### Session API
+
+The FastAPI service stores session history in SQLite and scopes every session,
+workspace, and persona directory to the authenticated owner and session. Sign
+in with `POST /auth/signin`; it accepts JSON with `email` and `password`, and
+returns a bearer access token. Passwords must contain 12–128 characters.
+Accounts and hashed access tokens are stored in `auth.sqlite3` under
+`MYAGENT_DATA_DIR` (default `~/.myagent`); tokens expire after 24 hours and
+`POST /auth/signout` revokes the current token. Signup with `POST /auth/signup`
+is disabled by default; set `MYAGENT_SIGNUP_ENABLED=true` only when public
+self-registration is intended in development or behind a controlled onboarding
+flow. Signup attempts are limited by IP; signin
+attempts are limited by both IP and normalized email. Both emit
+credential-free authentication event logs. The
+optional `MYAGENT_API_TOKENS` JSON map remains available for operator-managed
+bearer tokens, which must be rotated by the operator.
+
+Start the API with `uv run myagent-api`. It listens on `127.0.0.1:8000` by
+default; set `MYAGENT_API_HOST` and `MYAGENT_API_PORT` to change the bind
+address. The API uses `MYAGENT_DATA_DIR` for its SQLite database and owner
+persona data, and `MYAGENT_API_WORKSPACE_ROOT` for isolated workspaces. Each
+API session reads files from
+`<workspace-root>/<sha256(owner-id)[:24]>/<sha256(session-id)[:24]>`; the API
+does not currently provide a file upload route, so provision session files on
+the server under that directory. Deleting a session removes its workspace and
+persona directories.
+
+Session routes and `/auth/signout` require `Authorization: Bearer <token>`.
+`GET /health`, `/auth/signup`, and `/auth/signin` do not require a bearer token:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/sessions` | Create an empty session |
+| `GET` | `/sessions` | List the authenticated owner's sessions |
+| `GET` | `/sessions/{session_id}` | Get session status |
+| `DELETE` | `/sessions/{session_id}` | Delete session and its history |
+| `POST` | `/sessions/{session_id}/messages` | Send `{"content":"..."}` and get the completed response |
+| `GET` | `/sessions/{session_id}/messages` | Read user and assistant history |
+| `GET` | `/health` | Check service availability |
+
+Authentication routes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/auth/signup` | Register an account and issue an access token |
+| `POST` | `/auth/signin` | Verify credentials and issue an access token |
+| `POST` | `/auth/signout` | Revoke the current database-issued token |
+
+For example, register and save the returned token:
+
+```bash
+MYAGENT_SIGNUP_ENABLED=true uv run myagent-api
+# In another terminal:
+curl -s -X POST http://127.0.0.1:8000/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","password":"a-long-unique-password"}'
+```
+
+### Production deployment requirements
+
+The bundled SQLite stores are designed for one host with durable local disk;
+SQLite WAL is not suitable for a shared network filesystem or multi-host
+replicas. Back up the database files using a SQLite-consistent backup method,
+and verify restore procedures before accepting durable user data. Put the API
+behind a TLS-terminating reverse proxy, configure only trusted proxy handling,
+protect database backups, and monitor disk capacity. The built-in signup flow
+does not verify email ownership or support password recovery, and enabled
+signup reveals whether an email already has an account. Keep signup disabled
+for public deployments unless an external verification/onboarding process is
+in place.
+For multi-host availability, high write volume, or strong recovery objectives,
+move session and auth persistence to an appropriately operated database before
+deployment.
+
+Send an optional `Idempotency-Key` header with a message request to safely
+retry a completed request. Concurrent requests for the same session receive
+`409` while a turn is active. Session content persists across service restarts.
+The API currently returns completed messages rather than streaming tokens.
+
 ### Configuration
 
 The AI SDK adapter reads `GROQ_API_KEY`, `GROQ_BASE_URL`, and optional `GROQ_MODEL` from `.env`. The example file contains the base URL; replace the API key placeholder with your key.
@@ -223,6 +303,42 @@ uv run myagent
 
 To run the package module directly, use `uv run python -m myagent`.
 
+### Sessions
+
+Each run starts a new session unless `--session` is given. Session history,
+turn status, partial streamed text, and tool audit events are stored in
+`~/.myagent/sessions.sqlite3` by default. Set `MYAGENT_DATA_DIR` to move this
+storage location and `MYAGENT_OWNER_ID` to scope sessions to a local user.
+
+```bash
+uv run myagent --list-sessions
+uv run myagent --session <session-id>
+uv run myagent --audit-session <session-id>
+uv run myagent-clean-db
+```
+
+`myagent-clean-db` asks for confirmation before deleting all session, message,
+turn, and audit data. It preserves the database file and schema, and refuses to
+clear data while a turn is running. Use `--yes` for an unattended cleanup or
+`--data-dir /path/to/myagent-data` to target another data directory.
+
+File reads are restricted to the current directory by default; set
+`MYAGENT_WORKSPACE` to choose another allowed directory. Local CLI owner IDs
+are an isolation key, not an authentication mechanism. A hosted deployment
+must supply a trusted owner ID from its authentication layer.
+
+To verify multi-turn history against a running model server, configure
+`GROQ_BASE_URL`, `GROQ_MODEL`, and `GROQ_API_KEY` in `.env`, start the model
+server, then run:
+
+```bash
+MYAGENT_RUN_LIVE_SESSION_TEST=1 uv run python -m unittest tests.test_live_session_history -v
+```
+
+This opt-in test sends two real model requests, reopens the session database,
+and checks that both turns remain in history. It uses a temporary database and
+is skipped by the regular test suite unless explicitly enabled.
+
 ## Development Roadmap
 
 - [x] Basic LLM adapter architecture
@@ -234,6 +350,7 @@ To run the package module directly, use `uv run python -m myagent`.
 - [ ] Skill context management
 - [ ] Improved tool execution and error handling
 - [ ] Conversation-level memory management
+- [x] Durable conversation sessions
 - [ ] Additional model adapters
 
 ## Design Principles

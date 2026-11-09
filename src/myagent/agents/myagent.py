@@ -1,6 +1,6 @@
 import ai
 
-from myagent.tools import get_agent_tools
+from myagent.sessions import SessionBusy, SessionManager
 
 
 SYSTEM_PROMPT = """
@@ -58,24 +58,33 @@ confirms it.
 """
 
 
-async def myagent(model: ai.Model) -> None:
-    agent = ai.Agent(tools=get_agent_tools())
-    messages = [ai.system_message(SYSTEM_PROMPT)]
-
+async def myagent(
+    model: ai.Model,
+    sessions: SessionManager,
+    session_id: str,
+) -> None:
     while True:
         text = input("\nYou: ")
         if text.lower() == "exit":
             break
+        if not text.strip():
+            continue
 
-        messages.append(ai.user_message(text))
-
-        async with agent.run(model, messages) as stream:
-            async for event in stream:
-                if isinstance(event, ai.events.ToolStart):
-                    print(f"\n[tool] {event.tool_name}")
-                elif isinstance(event, ai.events.TextDelta):
-                    print(event.chunk, end="", flush=True)
-
-            messages = stream.messages
-
+        try:
+            await sessions.run_turn(
+                session_id,
+                text,
+                model,
+                on_event=_render_event,
+            )
+        except SessionBusy as error:
+            print(error)
+            break
         print("\n" + "-" * 50)
+
+
+def _render_event(event: ai.events.AgentEvent) -> None:
+    if isinstance(event, ai.events.ToolStart):
+        print(f"\n[tool] {event.tool_name}")
+    elif isinstance(event, ai.events.TextDelta):
+        print(event.chunk, end="", flush=True)
