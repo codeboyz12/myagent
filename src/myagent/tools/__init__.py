@@ -1,4 +1,4 @@
-from tools.registry import (
+from myagent.tools.registry import (
     get_tool_registry,
     get_tool_schemas,
 )

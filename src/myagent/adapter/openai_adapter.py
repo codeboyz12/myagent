@@ -1,4 +1,4 @@
-from adapter.base import BaseLLMAdapter
+from myagent.adapter.base import BaseLLMAdapter
 import os
 from openai import OpenAI
 
