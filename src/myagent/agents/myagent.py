@@ -1,8 +1,6 @@
-from myagent.tools import get_tool_registry, get_tool_schemas
-import json
+import ai
 
-TOOL_REGISTRY = get_tool_registry()
-TOOL_SCHEMAS = get_tool_schemas()
+from myagent.tools import get_agent_tools
 
 
 SYSTEM_PROMPT = """
@@ -60,80 +58,24 @@ confirms it.
 """
 
 
-def handle_tool_calls(tool_calls, messages):
-
-    for tool_call in tool_calls:
-
-        name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments)
-
-        print(f"[tool] {name}({args})")
-
-        if name not in TOOL_REGISTRY:
-            result = f"Error: unknown tool '{name}'"
-
-        else:
-            try:
-                result = TOOL_REGISTRY[name](**args)
-                result = str(result)
-
-            except Exception as e:
-                result = f"Tool execution error: {e}"
-
-        print(f"[tool result] {result[:200]}")
-
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": result,
-        })
-
-
-def myagent(model):
-
-    messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-        }
-    ]
+async def myagent(model: ai.Model) -> None:
+    agent = ai.Agent(tools=get_agent_tools())
+    messages = [ai.system_message(SYSTEM_PROMPT)]
 
     while True:
-
         text = input("\nYou: ")
-
         if text.lower() == "exit":
             break
 
-        messages.append({
-            "role": "user",
-            "content": text
-        })
+        messages.append(ai.user_message(text))
 
-        while True:
+        async with agent.run(model, messages) as stream:
+            async for event in stream:
+                if isinstance(event, ai.events.ToolStart):
+                    print(f"\n[tool] {event.tool_name}")
+                elif isinstance(event, ai.events.TextDelta):
+                    print(event.chunk, end="", flush=True)
 
-            response = model.generate(
-                messages,
-                tools=TOOL_SCHEMAS
-            )
+            messages = stream.messages
 
-            # Preserve the complete assistant message,
-            # including tool_calls.
-            messages.append(
-                response.model_dump(exclude_none=True)
-            )
-
-            if response.tool_calls:
-
-                handle_tool_calls(
-                    response.tool_calls,
-                    messages
-                )
-
-                continue
-
-            print("-" * 50)
-            print("Assistant:", response.content)
-            print("-" * 50)
-
-            break
+        print("\n" + "-" * 50)

@@ -1,13 +1,13 @@
+import asyncio
+
 from dotenv import load_dotenv
-from myagent.adapter.openai_adapter import openAIAdapter
+from myagent.adapter.ai_sdk import create_model
 from myagent.agents import myagent
 
-load_dotenv()
-
-llm = openAIAdapter()
 
 def main():
-    myagent(model=llm)
+    load_dotenv()
+    asyncio.run(myagent(model=create_model()))
 
 
 if __name__ == "__main__":

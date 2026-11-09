@@ -8,8 +8,8 @@ The project focuses on building a flexible Agent architecture where the LLM deci
 
 ## Features
 
-- **LLM Integration** — Connect to LLMs through an adapter-based architecture.
-- **Tool Calling** — Allow the LLM to interact with external functions through structured tool schemas.
+- **LLM Integration** — Stream model responses through Vercel's AI SDK.
+- **Tool Calling** — Expose typed Python functions as tools managed by the AI SDK.
 - **Skill System** — Extend agent capabilities using Markdown-based instructions.
 - **Dynamic Skill Selection** — Let the LLM discover and select relevant skills at runtime.
 - **Persona Management** — Maintain structured information about conversation partners.
@@ -53,14 +53,14 @@ Located in `src/myagent/agents/myagent.py`.
 
 The Agent is responsible for orchestrating interactions between the user, LLM, tools, and skills.
 
+The agent keeps conversation history and delegates model streaming and tool execution to Vercel's AI SDK.
+
 Its responsibilities include:
 
 - Maintaining conversation history.
-- Sending messages and tool schemas to the LLM.
-- Processing tool calls returned by the model.
-- Executing the requested tools.
-- Returning tool results to the LLM.
-- Continuing the agent loop until a final response is generated.
+- Sending conversation messages and SDK tools to the model.
+- Streaming generated text to the terminal.
+- Retaining the complete conversation across turns.
 
 The LLM determines which actions are appropriate based on the conversation context.
 
@@ -68,7 +68,7 @@ The LLM determines which actions are appropriate based on the conversation conte
 
 Located in `src/myagent/adapter/`.
 
-The adapter provides a unified interface for communicating with different LLM providers.
+`ai_sdk.py` configures the AI SDK model to use Groq's OpenAI-compatible API.
 
 This abstraction makes it possible to switch models without changing the core agent implementation.
 
@@ -78,10 +78,7 @@ Located in `src/myagent/tools/`.
 
 Tools provide executable capabilities that the LLM can invoke.
 
-The system uses two main components:
-
-- `registry.py` — Maps tool names to Python functions.
-- `schemas/tool_schemas.json` — Defines tool names, descriptions, and parameters exposed to the LLM.
+`registry.py` exposes the Python tools through `ai.tool`; the SDK derives tool schemas and manages tool calls.
 
 Available tools include:
 
@@ -185,7 +182,7 @@ When the LLM determines that a specialized skill is required, it can discover an
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.12+
 - An LLM provider with compatible chat completion and tool-calling support
 - An API key for the selected provider, if required
 
@@ -214,7 +211,7 @@ cp .env.example .env
 
 ### Configuration
 
-The OpenAI-compatible adapter reads `GROQ_API_KEY` and `GROQ_BASE_URL` from `.env`. The example file contains the base URL; replace the API key placeholder with your key.
+The AI SDK adapter reads `GROQ_API_KEY`, `GROQ_BASE_URL`, and optional `GROQ_MODEL` from `.env`. The example file contains the base URL; replace the API key placeholder with your key.
 
 Keep API credentials in environment variables rather than hardcoding them in source files.
 
@@ -230,7 +227,7 @@ To run the package module directly, use `uv run python -m myagent`.
 
 - [x] Basic LLM adapter architecture
 - [x] Initial Agent Loop
-- [x] Tool registry and schema definitions
+- [x] Tool registry with SDK-generated schemas
 - [ ] Complete Skill Discovery and Loading integration
 - [ ] Persona persistence and management
 - [ ] Dynamic multi-skill orchestration
