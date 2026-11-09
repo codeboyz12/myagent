@@ -6,12 +6,13 @@ import hashlib
 import json
 import logging
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import ai
+from ai.models import InferenceRequestParams
 from ai.types.messages import Message
 
 from myagent.sessions.store import (
@@ -128,6 +129,9 @@ class SessionManager:
     def list_sessions(self) -> list[SessionSummary]:
         return self.store.list_sessions(self.owner_id)
 
+    def rename_session(self, session_id: str, title: str) -> SessionSummary:
+        return self.store.rename_session(self.owner_id, session_id, title)
+
     def delete_session(self, session_id: str) -> None:
         self.store.delete_session(self.owner_id, session_id)
         if self._session_scoped_context:
@@ -162,7 +166,10 @@ class SessionManager:
         user_text: str,
         model: ai.Model,
         *,
+        fallback_model: ai.Model | None = None,
         request_id: str | None = None,
+        reasoning_effort: str | None = None,
+        provider_params: Mapping[str, Any] | None = None,
         on_event: Callable[[ai.events.AgentEvent], None] | None = None,
     ) -> str:
         state = self.load_session(session_id)
@@ -208,17 +215,77 @@ class SessionManager:
         )
 
         try:
-            agent = self._agent_factory(context)
-            async with agent.run(model, messages) as stream:
-                async for event in stream:
-                    self._record_agent_event(session_id, turn_id, event)
-                    if isinstance(event, ai.events.TextDelta):
-                        self.store.append_partial_text(turn_id, event.chunk)
-                    if on_event is not None:
-                        on_event(event)
+            params = (
+                InferenceRequestParams(extra_body=dict(provider_params))
+                if provider_params
+                else None
+            )
+            if reasoning_effort is not None:
+                params = (params or InferenceRequestParams()).with_reasoning_effort(
+                    reasoning_effort
+                )
+            provider_activity_seen = False
 
-                final_messages = stream.messages
-                assistant_text = str(stream.output)
+            async def run_with(
+                selected_model: ai.Model,
+            ) -> tuple[list[Message], str]:
+                nonlocal provider_activity_seen
+                agent = self._agent_factory(context)
+                tool_argument_chunks: dict[str, str] = {}
+                run = (
+                    agent.run(selected_model, messages, params=params)
+                    if params is not None
+                    else agent.run(selected_model, messages)
+                )
+                async with run as stream:
+                    async for event in stream:
+                        if isinstance(
+                            event,
+                            (
+                                ai.events.TextDelta,
+                                ai.events.ReasoningDelta,
+                                ai.events.ToolStart,
+                                ai.events.ToolDelta,
+                                ai.events.ToolCallResult,
+                            ),
+                        ):
+                            provider_activity_seen = True
+                        self._record_agent_event(
+                            session_id, turn_id, event, tool_argument_chunks
+                        )
+                        if isinstance(event, ai.events.TextDelta):
+                            self.store.append_partial_text(turn_id, event.chunk)
+                        if on_event is not None:
+                            on_event(event)
+
+                    return stream.messages, str(stream.output)
+
+            try:
+                final_messages, assistant_text = await run_with(model)
+            except Exception:
+                if fallback_model is None or provider_activity_seen:
+                    raise
+                logger.warning(
+                    "Primary model failed before producing output; trying fallback",
+                    extra={
+                        "event": "model_fallback",
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "primary_model_id": model.id,
+                        "fallback_model_id": fallback_model.id,
+                    },
+                )
+                self.store.record_event(
+                    self.owner_id,
+                    session_id,
+                    turn_id,
+                    "model_fallback",
+                    {
+                        "primary_model_id": model.id,
+                        "fallback_model_id": fallback_model.id,
+                    },
+                )
+                final_messages, assistant_text = await run_with(fallback_model)
 
             self.store.complete_turn(
                 self.owner_id,
@@ -269,8 +336,13 @@ class SessionManager:
         session_id: str,
         turn_id: str,
         event: ai.events.AgentEvent,
+        tool_argument_chunks: dict[str, str],
     ) -> None:
-        if isinstance(event, ai.events.ToolStart):
+        if isinstance(event, ai.events.ToolDelta):
+            tool_argument_chunks[event.tool_call_id] = (
+                tool_argument_chunks.get(event.tool_call_id, "") + event.chunk
+            )
+        elif isinstance(event, ai.events.ToolStart):
             self.store.record_event(
                 self.owner_id,
                 session_id,
@@ -284,6 +356,16 @@ class SessionManager:
             )
         elif isinstance(event, ai.events.ToolCallResult):
             for result in event.results:
+                raw_arguments = tool_argument_chunks.pop(result.tool_call_id, "")
+                try:
+                    decoded_arguments = json.loads(raw_arguments or "{}")
+                except json.JSONDecodeError:
+                    decoded_arguments = {}
+                arguments = (
+                    _redact(decoded_arguments)
+                    if isinstance(decoded_arguments, dict)
+                    else {}
+                )
                 encoded_result = json.dumps(
                     _json_value(result.result),
                     ensure_ascii=False,
@@ -298,6 +380,7 @@ class SessionManager:
                         "tool_call_id": result.tool_call_id,
                         "tool_name": result.tool_name,
                         "is_error": result.is_error,
+                        "arguments": arguments,
                         "result_sha256": hashlib.sha256(encoded_result).hexdigest(),
                         "result_bytes": len(encoded_result),
                     },

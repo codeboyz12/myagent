@@ -6,8 +6,11 @@ from typing import Any, Literal
 import ai
 
 from myagent.tools.context import ToolContext
+from myagent.tools.filesystem import list_files as _list_files
 from myagent.tools.filesystem import read_file as _read_file
 from myagent.tools.persona import get_persona as _get_persona
+from myagent.tools.persona import list_personas as _list_personas
+from myagent.tools.persona import delete_persona as _delete_persona
 from myagent.tools.persona import update_persona as _update_persona
 from myagent.tools.skills import list_skills as _list_skills
 from myagent.tools.skills import load_skill as _load_skill
@@ -35,6 +38,16 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
         )
 
     @ai.tool
+    async def list_files(path: str = ".", limit: int = 200) -> str:
+        """List files and folders immediately inside a workspace directory."""
+        return _run_tool(
+            _list_files,
+            path=path,
+            limit=limit,
+            root=context.workspace_root,
+        )
+
+    @ai.tool
     async def list_skills() -> str:
         """Discover available Skills and their descriptions."""
         return _run_tool(_list_skills)
@@ -49,6 +62,20 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
         """Retrieve a profile belonging to this user."""
         return _run_tool(
             _get_persona,
+            persona_id=persona_id,
+            persona_dir=context.persona_dir,
+        )
+
+    @ai.tool
+    async def list_personas() -> str:
+        """List persona profile IDs available in this session."""
+        return _run_tool(_list_personas, persona_dir=context.persona_dir)
+
+    @ai.tool
+    async def delete_persona(persona_id: str) -> str:
+        """Delete a persona profile from this session."""
+        return _run_tool(
+            _delete_persona,
             persona_id=persona_id,
             persona_dir=context.persona_dir,
         )
@@ -79,4 +106,13 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
             persona_dir=context.persona_dir,
         )
 
-    return [read_file, list_skills, load_skill, get_persona, update_persona]
+    return [
+        list_files,
+        read_file,
+        list_skills,
+        load_skill,
+        get_persona,
+        list_personas,
+        update_persona,
+        delete_persona,
+    ]

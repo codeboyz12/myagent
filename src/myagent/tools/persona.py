@@ -47,6 +47,28 @@ def get_persona(persona_id: str, *, persona_dir: Path = PERSONA_DIR) -> str:
     )
 
 
+def list_personas(*, persona_dir: Path = PERSONA_DIR) -> str:
+    """List persona IDs in the caller's scoped persona directory."""
+    if not persona_dir.is_dir():
+        return "No persona profiles found."
+    persona_ids = sorted(
+        path.stem for path in persona_dir.glob("*.json") if path.is_file()
+    )
+    return json.dumps(persona_ids, ensure_ascii=False, indent=2)
+
+
+def delete_persona(persona_id: str, *, persona_dir: Path = PERSONA_DIR) -> str:
+    """Delete a persona profile from the caller's scoped directory."""
+    try:
+        persona_path = _persona_path(persona_id, persona_dir)
+    except ValueError as error:
+        return f"Error: {error}"
+    if not persona_path.is_file():
+        return "No persona profile found."
+    persona_path.unlink()
+    return f"Persona deleted: {persona_id}"
+
+
 def update_persona(
     persona_id: str,
     field: str,

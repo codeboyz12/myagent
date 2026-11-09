@@ -6,7 +6,7 @@ from pathlib import Path
 
 import ai
 from dotenv import load_dotenv
-from myagent.adapter.ai_sdk import create_model
+from myagent.adapter.ai_sdk import create_fallback_model, create_model
 from myagent.agents.myagent import SYSTEM_PROMPT, myagent
 from myagent.sessions import SQLiteSessionStore, SessionManager
 
@@ -55,6 +55,7 @@ def main():
         return
 
     model = create_model()
+    fallback_model = create_fallback_model()
     if args.session:
         try:
             state = sessions.load_session(args.session)
@@ -67,7 +68,7 @@ def main():
         session = sessions.create_session([ai.system_message(SYSTEM_PROMPT)])
 
     print(f"Session: {session.id}")
-    asyncio.run(myagent(model, sessions, session.id))
+    asyncio.run(myagent(model, sessions, session.id, fallback_model))
 
 
 if __name__ == "__main__":

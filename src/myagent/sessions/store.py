@@ -47,6 +47,7 @@ class SessionSummary:
     created_at: str
     updated_at: str
     last_turn_status: str | None
+    title: str | None = None
 
 
 def _now() -> str:
@@ -141,7 +142,8 @@ class SQLiteSessionStore:
                     id TEXT PRIMARY KEY,
                     owner_id TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    custom_title TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS sessions_owner_updated
@@ -190,6 +192,12 @@ class SQLiteSessionStore:
                     ON audit_events(session_id, id);
                 """
             )
+            session_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(sessions)")
+            }
+            if "custom_title" not in session_columns:
+                connection.execute("ALTER TABLE sessions ADD COLUMN custom_title TEXT")
 
     def create_session(
         self,
@@ -224,6 +232,9 @@ class SQLiteSessionStore:
             rows = connection.execute(
                 """
                 SELECT s.id, s.created_at, s.updated_at,
+                       COALESCE(s.custom_title, (SELECT substr(t.user_text, 1, 200) FROM turns t
+                        WHERE t.session_id = s.id AND t.user_text <> ''
+                        ORDER BY t.started_at, t.rowid LIMIT 1)) AS title,
                        (SELECT t.status FROM turns t
                         WHERE t.session_id = s.id
                         ORDER BY t.started_at DESC, t.rowid DESC LIMIT 1) AS last_turn_status
@@ -236,7 +247,7 @@ class SQLiteSessionStore:
         return [
             SessionSummary(
                 row["id"], row["created_at"], row["updated_at"],
-                row["last_turn_status"],
+                row["last_turn_status"], row["title"],
             )
             for row in rows
         ]
@@ -257,6 +268,23 @@ class SQLiteSessionStore:
             connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+    def rename_session(self, owner_id: str, session_id: str, title: str) -> SessionSummary:
+        cleaned_title = " ".join(title.split())
+        if not cleaned_title or len(cleaned_title) > 200:
+            raise ValueError("Session title must contain 1 to 200 characters.")
+        timestamp = _now()
+        with self._transaction() as connection:
+            self._require_owned_session(connection, owner_id, session_id)
+            connection.execute(
+                "UPDATE sessions SET custom_title = ?, updated_at = ? WHERE id = ?",
+                (cleaned_title, timestamp, session_id),
+            )
+            self._append_event(
+                connection, session_id, None, "session_renamed",
+                {"title": cleaned_title}, timestamp,
+            )
+        return self.get_session(owner_id, session_id)
 
     def clear_all_sessions(self) -> int:
         """Delete all session data, refusing to interrupt a live turn."""
@@ -286,6 +314,9 @@ class SQLiteSessionStore:
             row = connection.execute(
                 """
                 SELECT s.id, s.created_at, s.updated_at,
+                       COALESCE(s.custom_title, (SELECT substr(t.user_text, 1, 200) FROM turns t
+                        WHERE t.session_id = s.id AND t.user_text <> ''
+                        ORDER BY t.started_at, t.rowid LIMIT 1)) AS title,
                        (SELECT t.status FROM turns t
                         WHERE t.session_id = s.id
                         ORDER BY t.started_at DESC, t.rowid DESC LIMIT 1) AS last_turn_status
@@ -295,7 +326,7 @@ class SQLiteSessionStore:
             ).fetchone()
         return SessionSummary(
             row["id"], row["created_at"], row["updated_at"],
-            row["last_turn_status"],
+            row["last_turn_status"], row["title"],
         )
 
     def load_messages(

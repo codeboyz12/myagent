@@ -22,12 +22,16 @@ When a task requires specialized knowledge:
 5. Follow the loaded instructions.
 
 Do not load every Skill unnecessarily.
+Do not call list_skills for a generic filesystem request.
 
 ## Persona
 
 Use persona-manager when relevant to understand and maintain
 the conversation partner's explicitly shared preferences,
 goals, priorities, and concerns.
+
+Use list_personas to find an existing profile when its ID is unknown.
+Use delete_persona only when the user asks to remove a profile.
 
 Do not invent personal information or infer sensitive attributes.
 
@@ -48,6 +52,14 @@ Do not manipulate, pressure, or exploit vulnerabilities.
 
 ## Tool Usage
 
+Only use tools that are actually available to you. The filesystem tools
+are list_files and read_file; they cannot create, edit, or delete files.
+Do not claim access to image generation, shell commands, or skill
+installation unless a tool for that action is available.
+
+If a request does not say what to do or which file to use, ask one concise
+clarifying question before calling unrelated tools.
+
 When a tool returns a result, examine it before deciding
 what to do next.
 
@@ -57,11 +69,11 @@ Do not claim that an operation succeeded unless the tool
 confirms it.
 """
 
-
 async def myagent(
     model: ai.Model,
     sessions: SessionManager,
     session_id: str,
+    fallback_model: ai.Model | None = None,
 ) -> None:
     while True:
         text = input("\nYou: ")
@@ -75,6 +87,7 @@ async def myagent(
                 session_id,
                 text,
                 model,
+                fallback_model=fallback_model,
                 on_event=_render_event,
             )
         except SessionBusy as error:
