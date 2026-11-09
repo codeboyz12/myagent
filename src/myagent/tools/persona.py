@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 
-PERSONA_DIR = Path(__file__).resolve().parent.parent / "data" / "personas"
+PROJECT_DIR = Path(__file__).resolve().parents[3]
+PERSONA_DIR = PROJECT_DIR / "data" / "personas"
 
 
 def get_persona(persona_id: str) -> str:

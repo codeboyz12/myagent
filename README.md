@@ -22,24 +22,14 @@ The project separates model communication, agent orchestration, tools, and skill
 ```text
 myagent/
 │
-├── main.py
-│
-├── adapter/
-│   ├── base.py
-│   └── openai_adapter.py
-│
-├── agents/
-│   ├── __init__.py
-│   └── myagent.py
-│
-├── tools/
-│   ├── __init__.py
-│   ├── registry.py
-│   ├── filesystem.py
-│   ├── skills.py
-│   ├── persona.py
-│   └── schemas/
-│       └── tool_schemas.json
+├── pyproject.toml
+├── uv.lock
+├── src/
+│   └── myagent/
+│       ├── __main__.py
+│       ├── adapter/
+│       ├── agents/
+│       └── tools/
 │
 ├── skills/
 │   ├── persona-manager/
@@ -59,7 +49,7 @@ myagent/
 
 ### 1. Agent
 
-Located in `agents/myagent.py`.
+Located in `src/myagent/agents/myagent.py`.
 
 The Agent is responsible for orchestrating interactions between the user, LLM, tools, and skills.
 
@@ -76,7 +66,7 @@ The LLM determines which actions are appropriate based on the conversation conte
 
 ### 2. Model Adapter
 
-Located in `adapter/`.
+Located in `src/myagent/adapter/`.
 
 The adapter provides a unified interface for communicating with different LLM providers.
 
@@ -84,7 +74,7 @@ This abstraction makes it possible to switch models without changing the core ag
 
 ### 3. Tool System
 
-Located in `tools/`.
+Located in `src/myagent/tools/`.
 
 Tools provide executable capabilities that the LLM can invoke.
 
@@ -105,7 +95,7 @@ Available tools include:
 
 ### 4. Skill System
 
-Located in `skills/`.
+Located in the top-level `skills/` directory.
 
 Skills are modular Markdown instruction files that extend the agent's behavior.
 
@@ -130,7 +120,7 @@ The Skill System follows a discovery-and-loading approach:
 
 ### 5. Persona Management
 
-Located in `tools/persona.py`.
+Located in `src/myagent/tools/persona.py`.
 
 Persona Management maintains structured information about conversation partners.
 
@@ -208,43 +198,33 @@ git clone https://github.com/codeboyz12/myagent.git
 cd myagent
 ```
 
-Create a virtual environment:
+Install the project and its dependencies with uv (this creates `.venv` and installs the `myagent` command):
 
 ```bash
-python -m venv .venv
+uv sync
 ```
 
-Activate it:
-
-**macOS / Linux**
+Copy the example environment file and add your provider credentials:
 
 ```bash
-source .venv/bin/activate
+cp .env.example .env
 ```
 
-**Windows**
-
-```bash
-.venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+`uv run` uses the project environment without requiring activation.
 
 ### Configuration
 
-Configure the required model settings and API credentials according to your selected adapter.
+The OpenAI-compatible adapter reads `GROQ_API_KEY` and `GROQ_BASE_URL` from `.env`. The example file contains the base URL; replace the API key placeholder with your key.
 
 Keep API credentials in environment variables rather than hardcoding them in source files.
 
 ### Run
 
 ```bash
-python main.py
+uv run myagent
 ```
+
+To run the package module directly, use `uv run python -m myagent`.
 
 ## Development Roadmap
 

@@ -1,4 +1,4 @@
-from tools import get_tool_registry, get_tool_schemas
+from myagent.tools import get_tool_registry, get_tool_schemas
 import json
 
 TOOL_REGISTRY = get_tool_registry()

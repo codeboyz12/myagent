@@ -17,6 +17,7 @@ __pycache__/
 dist/
 build/
 out/
+*.egg-info/
 
 # IDE and editor
 .vscode/

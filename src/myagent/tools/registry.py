@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from tools.filesystem import read_file
-from tools.skills import list_skills, load_skill
-from tools.persona import get_persona, update_persona
+from myagent.tools.filesystem import read_file
+from myagent.tools.skills import list_skills, load_skill
+from myagent.tools.persona import get_persona, update_persona
 
 
 def get_tool_registry():
