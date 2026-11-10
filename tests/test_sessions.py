@@ -416,20 +416,23 @@ class ScopedToolTests(unittest.TestCase):
             self.assertEqual(
                 [tool.name for tool in tools],
                 [
+                    "list_files",
                     "read_file",
                     "list_skills",
                     "load_skill",
                     "get_persona",
+                    "list_personas",
                     "update_persona",
+                    "delete_persona",
                 ],
             )
             self.assertIn(
                 "in scope",
-                asyncio.run(tools[0].fn(path="inside.txt")),
+                asyncio.run(tools[1].fn(path="inside.txt")),
             )
             self.assertIn(
                 "outside the allowed workspace",
-                asyncio.run(tools[0].fn(path=str(outside))),
+                asyncio.run(tools[1].fn(path=str(outside))),
             )
 
     def test_persona_ids_and_directories_are_isolated(self):

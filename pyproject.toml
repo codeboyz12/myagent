@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "ai[openai]>=0.9.0",
+    "cryptography>=50.0.2",
     "fastapi>=0.162.2",
+    "mcp>=1.26,<2",
     "python-dotenv>=1.0.0",
     "uvicorn>=0.54.0",
 ]
@@ -26,7 +28,11 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+myagent = ["prompt/*.txt"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "pytest>=9.2.0",
 ]

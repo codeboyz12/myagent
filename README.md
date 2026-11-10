@@ -1,5 +1,7 @@
 # myagent
 
+Local SearXNG web search and user-managed MCP server setup is documented in [docs/web-search.md](docs/web-search.md).
+
 **A lightweight, extensible LLM Agent built with Python.**
 
 `myagent` is a personal LLM Agent project designed to explore how Large Language Models can reason, interact with tools, and extend their capabilities through modular Skills.
@@ -85,11 +87,14 @@ Available tools include:
 
 | Tool | Description |
 |---|---|
+| `list_files` | List files and folders in the session workspace |
 | `read_file` | Read text files |
 | `list_skills` | Discover available skills |
 | `load_skill` | Load a skill's Markdown instructions |
 | `get_persona` | Retrieve a persona profile |
+| `list_personas` | List persona profile IDs in the current session |
 | `update_persona` | Update persona information |
+| `delete_persona` | Delete a persona profile in the current session |
 
 ### 4. Skill System
 
@@ -179,6 +184,11 @@ The agent uses an iterative tool-calling loop.
 
 When the LLM determines that a specialized skill is required, it can discover and load the corresponding Markdown instructions.
 
+`list_skills` and `load_skill` also include Codex system-provided skills from
+`$CODEX_HOME/skills/.system` (default: `~/.codex/skills/.system`). Their IDs
+use the `system/` prefix, such as `system/imagegen`, so they remain distinct
+from project skills.
+
 ## Getting Started
 
 ### Requirements
@@ -210,6 +220,26 @@ cp .env.example .env
 
 `uv run` uses the project environment without requiring activation.
 
+### Web workspace
+
+The `web/` directory contains a Next.js chat interface backed by the session API.
+Start the API with `uv run myagent-api`, then start the web app in a second
+terminal:
+
+```bash
+cd web
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) to sign in or create an
+account. Signup is available while the API is started with
+`MYAGENT_SIGNUP_ENABLED=true`; turn that setting off to disable new accounts.
+The Next.js backend-for-frontend stores the API token in an HttpOnly cookie; set
+`MYAGENT_API_URL` in `web/.env.local` if the API is not at its default
+`http://127.0.0.1:5000`. See [web/README.md](web/README.md) for details.
+
 ### Session API
 
 The FastAPI service stores session history in SQLite and scopes every session,
@@ -227,7 +257,7 @@ credential-free authentication event logs. The
 optional `MYAGENT_API_TOKENS` JSON map remains available for operator-managed
 bearer tokens, which must be rotated by the operator.
 
-Start the API with `uv run myagent-api`. It listens on `127.0.0.1:8000` by
+Start the API with `uv run myagent-api`. It listens on `127.0.0.1:5000` by
 default; set `MYAGENT_API_HOST` and `MYAGENT_API_PORT` to change the bind
 address. The API uses `MYAGENT_DATA_DIR` for its SQLite database and owner
 persona data, and `MYAGENT_API_WORKSPACE_ROOT` for isolated workspaces. Each
@@ -263,7 +293,7 @@ For example, register and save the returned token:
 ```bash
 MYAGENT_SIGNUP_ENABLED=true uv run myagent-api
 # In another terminal:
-curl -s -X POST http://127.0.0.1:8000/auth/signup \
+curl -s -X POST http://127.0.0.1:5000/auth/signup \
   -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com","password":"a-long-unique-password"}'
 ```
@@ -289,11 +319,32 @@ retry a completed request. Concurrent requests for the same session receive
 `409` while a turn is active. Session content persists across service restarts.
 The API currently returns completed messages rather than streaming tokens.
 
-### Configuration
+### Model settings
 
-The AI SDK adapter reads `GROQ_API_KEY`, `GROQ_BASE_URL`, and optional `GROQ_MODEL` from `.env`. The example file contains the base URL; replace the API key placeholder with your key.
+Signed-in users can add multiple personal OpenAI-compatible connections, edit
+them, enable or disable them, and choose which enabled provider chat uses from
+the Settings page. Each connection stores its own model and reasoning effort.
+API keys are stored separately from versioned user settings and encrypted with
+`MYAGENT_SETTINGS_ENCRYPTION_KEY`; the API never returns it. Generate a key
+with:
 
-Keep API credentials in environment variables rather than hardcoding them in source files.
+```bash
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Keep this encryption key stable and back it up separately from the database.
+If it is lost, saved provider keys cannot be decrypted. Model catalogs are
+cached for three minutes. Endpoints must implement OpenAI-compatible
+`GET /models` and chat completions APIs; model aliases are used as display
+labels, while IDs are sent to the provider.
+
+For local/private model endpoints, set
+`MYAGENT_ALLOW_PRIVATE_MODEL_ENDPOINTS=true`. This allows authenticated users
+to make the API server connect to private network addresses, so enable it only
+in a deployment where users are trusted to configure reachable endpoints.
+
+`GROQ_*` and `MYAGENT_FALLBACK_*` remain available for the local CLI. The
+authenticated web API uses each owner's saved model settings.
 
 ### Run
 
