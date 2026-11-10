@@ -307,6 +307,32 @@ class SQLiteSessionStore:
             connection.execute("DELETE FROM sessions")
         return len(session_ids)
 
+    def delete_owner_sessions(self, owner_id: str) -> list[str]:
+        """Delete one owner's sessions and return their IDs."""
+        with self._transaction() as connection:
+            session_ids = [
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM sessions WHERE owner_id = ?", (owner_id,)
+                ).fetchall()
+            ]
+            for session_id in session_ids:
+                self._recover_stale_turns(connection, session_id)
+            active = connection.execute(
+                "SELECT id FROM turns WHERE status = 'running' "
+                "AND session_id IN (SELECT id FROM sessions WHERE owner_id = ?) LIMIT 1",
+                (owner_id,),
+            ).fetchone()
+            if active:
+                raise SessionBusy("Cannot delete sessions while a turn is running.")
+
+            for session_id in session_ids:
+                connection.execute("DELETE FROM audit_events WHERE session_id = ?", (session_id,))
+                connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+                connection.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+                connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        return session_ids
+
     def get_session(self, owner_id: str, session_id: str) -> SessionSummary:
         with self._transaction() as connection:
             self._require_owned_session(connection, owner_id, session_id)
@@ -502,6 +528,13 @@ class SQLiteSessionStore:
             turn = self._require_running_turn(connection, turn_id)
             if turn["session_id"] != session_id:
                 raise SessionNotFound(session_id)
+            if interrupted:
+                self._append_interrupted_turn_messages(
+                    connection,
+                    session_id,
+                    turn["user_text"],
+                    turn["partial_text"],
+                )
             connection.execute(
                 "UPDATE turns SET status = ?, error = ?, finished_at = ? WHERE id = ?",
                 (status, safe_error, timestamp, turn_id),
@@ -606,7 +639,7 @@ class SQLiteSessionStore:
         session_id: str,
     ) -> None:
         rows = connection.execute(
-            "SELECT id, process_id FROM turns "
+            "SELECT id, process_id, user_text, partial_text FROM turns "
             "WHERE session_id = ? AND status = 'running'",
             (session_id,),
         ).fetchall()
@@ -614,6 +647,12 @@ class SQLiteSessionStore:
             if self._process_is_running(row["process_id"]):
                 continue
             timestamp = _now()
+            self._append_interrupted_turn_messages(
+                connection,
+                session_id,
+                row["user_text"],
+                row["partial_text"],
+            )
             connection.execute(
                 "UPDATE turns SET status = 'interrupted', finished_at = ? "
                 "WHERE id = ?",
@@ -627,3 +666,31 @@ class SQLiteSessionStore:
                 {"reason": "agent process exited before completion"},
                 timestamp,
             )
+
+    @classmethod
+    def _append_interrupted_turn_messages(
+        cls,
+        connection: sqlite3.Connection,
+        session_id: str,
+        user_text: str,
+        partial_text: str,
+    ) -> None:
+        rows = connection.execute(
+            "SELECT body_json FROM messages WHERE session_id = ? ORDER BY position",
+            (session_id,),
+        ).fetchall()
+        messages = [json.loads(row["body_json"]) for row in rows]
+        messages.append(cls._text_message("user", user_text))
+        if partial_text:
+            messages.append(cls._text_message("assistant", partial_text))
+        cls._replace_messages(connection, session_id, messages)
+
+    @staticmethod
+    def _text_message(role: str, text: str) -> dict[str, Any]:
+        message_id = uuid.uuid4().hex[:12]
+        part_id = uuid.uuid4().hex[:12]
+        return {
+            "id": f"msg_{message_id}",
+            "role": role,
+            "parts": [{"id": f"part_{part_id}", "text": text, "kind": "text"}],
+        }

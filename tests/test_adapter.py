@@ -2,9 +2,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from ai.providers.openai import OpenAIChatCompletionsProtocol
+from ai.providers.openai import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
 
-from myagent.adapter.ai_sdk import create_model
+from myagent.adapter.ai_sdk import create_compatible_model, create_model
 
 
 class ModelAdapterTests(unittest.TestCase):
@@ -20,6 +20,15 @@ class ModelAdapterTests(unittest.TestCase):
             model = create_model()
 
         self.assertIsInstance(model.provider.protocol, OpenAIChatCompletionsProtocol)
+
+    def test_official_openai_endpoint_uses_responses_protocol(self):
+        model = create_compatible_model(
+            base_url="https://api.openai.com/v1",
+            api_key="test-key",
+            model_id="gpt-6-luna",
+        )
+
+        self.assertIsInstance(model.provider.protocol, OpenAIResponsesProtocol)
 
 
 if __name__ == "__main__":

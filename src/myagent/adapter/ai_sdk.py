@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import ai
@@ -125,16 +126,17 @@ def create_compatible_model(
     api_key: str | None,
     model_id: str,
 ) -> ai.Model:
-    """Create a model for a user-supplied OpenAI-compatible endpoint."""
-    provider = ai.get_provider(
-        "openai",
-        base_url=base_url,
-        api_key=api_key or "not-needed",
+    """Create a model for OpenAI or a user-supplied compatible endpoint."""
+    provider_options = {
+        "base_url": base_url,
+        "api_key": api_key or "not-needed",
+    }
+    if urlsplit(base_url).hostname != "api.openai.com":
         # OpenAI-compatible endpoints such as llama.cpp and Groq implement
-        # Chat Completions. The OpenAI provider name otherwise selects the
-        # newer Responses API, which can reject persisted multi-turn history.
-        protocol=OpenAIChatCompletionsProtocol(),
-    )
+        # Chat Completions. Official OpenAI uses Responses for reasoning
+        # models with function tools.
+        provider_options["protocol"] = OpenAIChatCompletionsProtocol()
+    provider = ai.get_provider("openai", **provider_options)
     return ai.Model(
         id=model_id,
         provider=provider,

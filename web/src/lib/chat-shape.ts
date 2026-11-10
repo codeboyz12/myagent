@@ -57,10 +57,29 @@ export const modelProvidersSchema = z.object({
     api_key_configured: z.boolean(),
     model_controls: z.record(z.string(), z.array(modelControlDefinitionSchema)).default({}),
     model_control_selections: z.record(z.string(), z.record(z.string(), z.string())).default({}),
+    models: z.array(z.object({ id: z.string(), name: z.string(), alias: z.string().optional() })).default([]),
   })),
   active_provider_id: z.string().nullable(),
 });
 export type ModelProvider = z.infer<typeof modelProvidersSchema>["providers"][number];
+
+export const toolActivitySchema = z.object({
+  tool_call_id: z.string(),
+  tool_name: z.string(),
+  arguments: z.record(z.string(), z.unknown()),
+  status: z.enum(["running", "completed", "error"]),
+  sources: z.array(z.object({
+    url: z.string().url().refine((value) => value.startsWith("https://") || value.startsWith("http://")),
+    title: z.string().optional(),
+  })).default([]),
+  images: z.array(z.object({
+    url: z.string().url().refine((value) => value.startsWith("https://")),
+    source_url: z.string().url().refine((value) => value.startsWith("https://")),
+    title: z.string().optional(),
+  })).default([]),
+});
+
+export type ToolActivity = z.infer<typeof toolActivitySchema>;
 
 export const sessionHistorySchema = z.object({
   session_id: z.string().uuid(),
@@ -69,18 +88,10 @@ export const sessionHistorySchema = z.object({
       index: z.number().int().nonnegative(),
       role: z.enum(["user", "assistant"]),
       content: z.string(),
+      tool_events: z.array(toolActivitySchema).default([]),
     }),
   ),
 });
-
-export const toolActivitySchema = z.object({
-  tool_call_id: z.string(),
-  tool_name: z.string(),
-  arguments: z.record(z.string(), z.unknown()),
-  status: z.enum(["completed", "error"]),
-});
-
-export type ToolActivity = z.infer<typeof toolActivitySchema>;
 
 export const chatRequestSchema = z.object({
   sessionId: z.string().uuid(),
@@ -98,7 +109,14 @@ export function toUIMessages(history: SessionHistory): UIMessage[] {
   return history.messages.map((message) => ({
     id: `${history.session_id}-${message.index}`,
     role: message.role,
-    parts: [{ type: "text", text: message.content }],
+    parts: [
+      { type: "text", text: message.content },
+      ...message.tool_events.map((activity) => ({
+        type: "data-tool-activity" as const,
+        id: activity.tool_call_id,
+        data: activity,
+      })),
+    ],
   }));
 }
 
@@ -115,7 +133,7 @@ export function getMessageText(message: UIMessage | undefined): string {
 export function getSessionLabel(session: SessionSummary): string {
   if (session.title?.trim()) {
     const title = session.title.trim().replace(/\s+/g, " ");
-    return title.length > 56 ? `${title.slice(0, 55).trimEnd()}…` : title;
+    return title.length > 32 ? `${title.slice(0, 31).trimEnd()}…` : title;
   }
   return "New chat";
 }

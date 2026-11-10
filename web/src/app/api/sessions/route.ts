@@ -27,3 +27,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     return unavailableResponse();
   }
 }
+
+export async function DELETE(request: Request): Promise<NextResponse> {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
+
+  try {
+    return relayBackendResponse(await callBackend("/sessions", { method: "DELETE" }));
+  } catch {
+    return unavailableResponse();
+  }
+}

@@ -3,9 +3,58 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { modelListSchema, modelProvidersSchema, modelSettingsSchema, type ModelControl, type ModelProvider } from "@/lib/chat-shape";
+import { modelProvidersSchema, modelSettingsSchema, type ModelControl, type ModelProvider } from "@/lib/chat-shape";
 
-type ModelOption = { id: string; name: string; alias?: string };
+type ModelOption = {
+  id: string;
+  name: string;
+  alias?: string;
+  providerId: string;
+  providerName: string;
+  value: string;
+};
+
+function modelOptionValue(providerId: string, modelId: string): string {
+  return `${providerId}:${modelId}`;
+}
+
+function listProviderModels(providers: ModelProvider[]): ModelOption[] {
+  return providers.flatMap((provider) => {
+    if (!provider.enabled) return [];
+    const savedModels = provider.models;
+    const legacyModelIds = Object.keys(provider.model_controls);
+    const availableModels = savedModels.length > 0
+      ? savedModels
+      : [...new Set([...legacyModelIds, provider.model_id])]
+          .filter(Boolean)
+          .map((id) => ({ id, name: id }));
+
+    return availableModels.map((model) => ({
+      ...model,
+      providerId: provider.id,
+      providerName: provider.name,
+      value: modelOptionValue(provider.id, model.id),
+    }));
+  });
+}
+
+async function responseMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload: unknown = await response.json();
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "detail" in payload &&
+      typeof payload.detail === "string"
+    ) {
+      return payload.detail;
+    }
+  } catch {
+    // Use the caller's fallback for non-JSON responses.
+  }
+  return fallback;
+}
+
 export function useModelSettings() {
   const router = useRouter();
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -43,6 +92,7 @@ export function useModelSettings() {
       if (!providerResult.success) throw new Error("Could not read your providers.");
       setProviders(providerResult.data.providers);
       setActiveProviderId(providerResult.data.active_provider_id);
+      setModels(listProviderModels(providerResult.data.providers));
       setConfigured(settings.configured);
       setBaseUrl(settings.base_url);
       setModelId(settings.model_id);
@@ -50,15 +100,6 @@ export function useModelSettings() {
       setModelControls(settings.model_controls);
       setControlSelections(settings.model_control_selections);
       setApiKeyConfigured(settings.api_key_configured);
-      if (settings.configured) {
-        const modelsResponse = await fetch("/api/models", { cache: "no-store" });
-        if (!modelsResponse.ok) throw new Error("Could not load available models.");
-        const catalog = modelListSchema.safeParse(await modelsResponse.json());
-        if (!catalog.success) throw new Error("Could not read available models.");
-        setModels(catalog.data.models);
-      } else {
-        setModels([]);
-      }
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not load model settings.");
@@ -80,10 +121,13 @@ export function useModelSettings() {
   }, [controlSelections, effort, modelId]);
 
   const saveSelection = useCallback(
-    async (nextModelId: string, nextEffort: string) => {
-      const previous = { modelId, effort };
+    async (nextModelId: string, nextEffort: string, nextProviderId = activeProviderId) => {
+      const previous = { modelId, effort, providerId: activeProviderId };
+      if (!nextProviderId) return;
+      let providerSwitched = false;
       setModelId(nextModelId);
       setEffort(nextEffort);
+      setActiveProviderId(nextProviderId);
       requestSettings.current = {
         modelId: nextModelId || null,
         effort: nextEffort,
@@ -91,6 +135,18 @@ export function useModelSettings() {
       };
       setError("");
       try {
+        if (nextProviderId !== previous.providerId) {
+          const providerResponse = await fetch("/api/model-providers", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider_id: nextProviderId }),
+          });
+          if (!providerResponse.ok) {
+            throw new Error(await responseMessage(providerResponse, "Could not switch model connection."));
+          }
+          providerSwitched = true;
+        }
+
         const response = await fetch("/api/model-settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -99,11 +155,21 @@ export function useModelSettings() {
             reasoning_effort: nextEffort,
           }),
         });
-        if (!response.ok) throw new Error("Could not save model selection.");
+        if (!response.ok) {
+          throw new Error(await responseMessage(response, "Could not save model selection."));
+        }
         await refresh();
       } catch (reason) {
+        if (providerSwitched && previous.providerId) {
+          await fetch("/api/model-providers", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider_id: previous.providerId }),
+          }).catch(() => undefined);
+        }
         setModelId(previous.modelId);
         setEffort(previous.effort);
+        setActiveProviderId(previous.providerId);
         requestSettings.current = {
           modelId: previous.modelId || null,
           effort: previous.effort,
@@ -112,11 +178,18 @@ export function useModelSettings() {
         setError(reason instanceof Error ? reason.message : "Could not save model selection.");
       }
     },
-    [controlSelections, effort, modelId, refresh],
+    [activeProviderId, controlSelections, effort, modelId, refresh],
   );
 
   const selectModel = useCallback(
-    (nextModelId: string) => void saveSelection(nextModelId, effort),
+    (value: string) => {
+      const separator = value.indexOf(":");
+      if (separator < 1) return;
+      const providerId = value.slice(0, separator);
+      const nextModelId = value.slice(separator + 1);
+      if (!nextModelId) return;
+      void saveSelection(nextModelId, effort, providerId);
+    },
     [effort, saveSelection],
   );
   const selectEffort = useCallback(
@@ -163,6 +236,9 @@ export function useModelSettings() {
     activeProviderId,
     baseUrl,
     modelId,
+    selectedModelValue: activeProviderId
+      ? modelOptionValue(activeProviderId, modelId)
+      : "",
     effort,
     modelControls,
     controlSelections,

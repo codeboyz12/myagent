@@ -4,6 +4,7 @@ import {
   chatRequestSchema,
   getMessageText,
   sessionHistorySchema,
+  toolActivitySchema,
   toUIMessages,
 } from "@/lib/chat-shape";
 import { completedAnswerStream } from "@/lib/chat-stream";
@@ -11,6 +12,47 @@ import { completedAnswerStream } from "@/lib/chat-stream";
 const sessionId = "8599ee19-5adb-48de-97c1-ac79f3c06391";
 
 describe("session history and AI SDK message conversion", () => {
+  it("accepts only web links as citation badge targets", () => {
+    expect(toolActivitySchema.safeParse({
+      tool_call_id: "search-1",
+      tool_name: "searxng_web_search",
+      arguments: {},
+      status: "completed",
+      sources: [{ url: "https://docs.example.org", title: "Docs" }],
+    }).success).toBe(true);
+    expect(toolActivitySchema.safeParse({
+      tool_call_id: "search-2",
+      tool_name: "searxng_web_search",
+      arguments: {},
+      status: "completed",
+      sources: [{ url: "javascript:alert(1)" }],
+    }).success).toBe(false);
+  });
+
+  it("accepts secure image URLs only when a source page is attached", () => {
+    expect(toolActivitySchema.safeParse({
+      tool_call_id: "image-1",
+      tool_name: "searxng_web_search",
+      arguments: { categories: "images" },
+      status: "completed",
+      images: [{
+        url: "https://images.example.org/kyoto.jpg",
+        source_url: "https://commons.wikimedia.org/wiki/Kyoto",
+        title: "Kyoto temple",
+      }],
+    }).success).toBe(true);
+    expect(toolActivitySchema.safeParse({
+      tool_call_id: "image-2",
+      tool_name: "searxng_web_search",
+      arguments: { categories: "images" },
+      status: "completed",
+      images: [{
+        url: "http://images.example.org/kyoto.jpg",
+        source_url: "https://commons.wikimedia.org/wiki/Kyoto",
+      }],
+    }).success).toBe(false);
+  });
+
   it("preserves order, roles, content, and stable history ids", () => {
     const history = sessionHistorySchema.parse({
       session_id: sessionId,
@@ -81,10 +123,12 @@ describe("AI SDK UI stream adapter", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
 
     const body = await response.text();
+    expect(body).toContain('"type":"start"');
     expect(body).toContain('"type":"text-start"');
     expect(body).toContain('"type":"text-delta"');
     expect(body).toContain('"delta":"A durable answer."');
     expect(body).toContain('"type":"text-end"');
+    expect(body).toContain('"type":"finish"');
     expect(body).toContain("data: [DONE]");
   });
 });

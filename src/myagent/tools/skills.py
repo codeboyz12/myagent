@@ -16,11 +16,17 @@ def _skill_dirs() -> list[tuple[str, Path]]:
     return [("", SKILLS_DIR), ("system/", _system_skills_dir())]
 
 
-def list_skills() -> str:
+def list_skills(library: list[dict] | None = None) -> str:
     """
     List available skills with their descriptions.
     """
 
+    if library is not None:
+        enabled = [item for item in library if item.get("enabled")]
+        return "\n\n".join(
+            f"Name: {item['name']}\nSkill ID: {item['id']}\nDescription: {item.get('description', '')}"
+            for item in enabled
+        ) or "No skills available."
     if not any(directory.is_dir() for _, directory in _skill_dirs()):
         return "No skills directory found."
 
@@ -58,11 +64,14 @@ def list_skills() -> str:
     return "\n\n".join(results)
 
 
-def load_skill(skill_name: str) -> str:
+def load_skill(skill_name: str, library: list[dict] | None = None) -> str:
     """
     Load a skill's SKILL.md instructions.
     """
 
+    if library is not None:
+        item = next((item for item in library if item.get("id") == skill_name and item.get("enabled")), None)
+        return item.get("content", "Error: skill not found or disabled.") if item else "Error: skill not found or disabled."
     prefix = "system/" if skill_name.startswith("system/") else ""
     skill_id = skill_name.removeprefix(prefix)
     root = _system_skills_dir() if prefix else SKILLS_DIR

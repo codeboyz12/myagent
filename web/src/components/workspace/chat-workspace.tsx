@@ -27,6 +27,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { WorkspaceSidebar } from "./workspace-sidebar";
+import { TipsTour } from "./tips-tour";
 
 type WorkspaceValue = {
   sessions: SessionSummary[];
@@ -219,7 +220,7 @@ function ChatWorkspaceShell({ children }: { children: ReactNode }) {
 
   return (
     <WorkspaceContext.Provider value={contextValue}>
-      <SidebarProvider className="workspace-shell">
+      <SidebarProvider defaultOpen={true} className="workspace-shell min-h-screen flex">
         <WorkspaceFrame
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -257,23 +258,25 @@ function WorkspaceFrame({
   renameSession: (sessionId: string, title: string) => Promise<void>;
 }) {
   const { setOpenMobile } = useSidebar();
-
+  const [tipsOpen, setTipsOpen] = useState(false);
   return (
     <>
       <WorkspaceSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
         loading={loading}
+        onOpenTips={() => setTipsOpen(true)}
         onDeleteSession={deleteSession}
         onRenameSession={renameSession}
       />
+      <TipsTour open={tipsOpen} onOpenChange={setTipsOpen} />
 
-      <SidebarInset className="workspace-main">
-        <header className="mobile-header">
-          <SidebarTrigger className="icon-button" aria-label="Open navigation" />
-          <span className="mobile-brand"><Icon name="leaf" /> myagent</span>
+      <SidebarInset className="min-w-0 flex-1 min-h-screen flex flex-col relative max-[760px]:min-h-dvh bg-background">
+        <header className="hidden max-[760px]:h-13 max-[760px]:flex-[0_0_52px] max-[760px]:flex max-[760px]:items-center max-[760px]:justify-between max-[760px]:p-[0_13px] max-[760px]:border-b max-[760px]:bg-background">
+          <SidebarTrigger className="grid place-items-center w-8.5 h-8.5 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer [&:hover]:bg-accent [&:hover]:text-foreground [&_svg]:w-4.5 [&_svg]:h-4.5" aria-label="Open navigation" />
+          <span className="max-[760px]:flex max-[760px]:items-center max-[760px]:gap-1.75 max-[760px]:font-[650] max-[760px]:tracking-[-.03em] max-[760px]:[&_svg]:w-4.5 max-[760px]:[&_svg]:h-4.5 max-[760px]:[&_svg]:text-muted-foreground"><Icon name="leaf" /> myagent</span>
           <Button
-            className="icon-button"
+            className="grid place-items-center w-8.5 h-8.5 border-0 rounded-md bg-transparent text-muted-foreground cursor-pointer [&:hover]:bg-accent [&:hover]:text-foreground [&_svg]:w-4.5 [&_svg]:h-4.5"
             variant="ghost"
             size="icon-sm"
             aria-label="New conversation"
@@ -283,7 +286,7 @@ function WorkspaceFrame({
           </Button>
         </header>
         {error && (
-          <Alert className="workspace-alert" variant="destructive">
+          <Alert className="absolute z-2 top-3.5 left-[50%] transform-[translateX(-50%)] flex items-center gap-4.5 max-w-[min(640px,calc(100%-28px))] shadow-md text-[12px] [&_button]:grid [&_button]:place-items-center [&_button]:border-0 [&_button]:bg-transparent [&_button]:text-inherit [&_button]:cursor-pointer [&_svg]:w-3.75 [&_svg]:h-3.75" variant="destructive">
             <AlertDescription>{error}</AlertDescription>
             <Button variant="ghost" size="icon-sm" aria-label="Dismiss error" onClick={clearError}>
               <Icon name="close" />

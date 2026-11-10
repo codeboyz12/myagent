@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { AuthPageLayout } from "@/components/auth-page-layout";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ArrowRight } from "lucide-react";
+import { useAuthSession } from "@/hooks/use-auth-session";
 
 async function readDetail(response: Response): Promise<string> {
   try {
@@ -34,21 +35,7 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-    void fetch("/api/auth/session", { cache: "no-store" })
-      .then((response) => {
-        if (response.ok) router.replace("/chat");
-      })
-      .finally(() => {
-        if (mounted) setCheckingSession(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [router]);
+  const checkingSession = useAuthSession();
 
   const signIn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -85,11 +72,11 @@ export default function SignInPage() {
       alternateLabel="Create an account"
     >
       {checkingSession ? (
-        <div className="signin-checking" role="status">
+        <div className="flex items-center gap-2.25 m-[34px_0] text-muted-foreground text-[12px]" role="status">
           <Spinner /> Checking your session…
         </div>
       ) : (
-        <form className="signin-form" onSubmit={(event) => void signIn(event)}>
+        <form className="grid mt-7.5 **:data-[slot=field-group]:gap-4 **:data-[slot=field-label]:font-[550] **:data-[slot=input]:text-[12px] [&_[data-slot=input]::placeholder]:text-muted-foreground max-[560px]:mt-5.25 **:data-[slot=field-label]:text-muted-foreground **:data-[slot=field-label]:text-[12px] **:data-[slot=input]:h-11.5 **:data-[slot=input]:border-input **:data-[slot=input]:rounded-md **:data-[slot=input]:bg-background [&_[data-slot=input]:focus-visible]:border-ring [&_[data-slot=input]:focus-visible]:ring-2 [&_[data-slot=input]:focus-visible]:ring-ring/50" onSubmit={(event) => void signIn(event)}>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="email">Email address</FieldLabel>
@@ -105,7 +92,7 @@ export default function SignInPage() {
               />
             </Field>
             <Field>
-              <div className="password-label-row">
+              <div className="flex items-center justify-between **:data-[slot=field-description]:pb-0 **:data-[slot=field-description]:text-muted-foreground **:data-[slot=field-description]:text-[10px]">
                 <FieldLabel htmlFor="password">Password</FieldLabel>
                 <FieldDescription>12 characters minimum</FieldDescription>
               </div>
@@ -123,9 +110,9 @@ export default function SignInPage() {
             </Field>
           </FieldGroup>
 
-          {error && <Alert className="form-error" variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+          {error && <Alert className="mt-3.25" variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
 
-          <Button className="signin-submit" type="submit" disabled={submitting}>
+          <Button className="w-full mt-5.5 text-[12px] h-11.5 rounded-md bg-primary text-primary-foreground [&:hover]:bg-primary" type="submit" disabled={submitting}>
             {submitting ? <Spinner data-icon="inline-start" /> : null}
             {submitting ? "Signing in…" : "Sign in"}
             {!submitting && <ArrowRight data-icon="inline-end" />}

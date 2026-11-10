@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useState } from "react";
 
 import { getSessionLabel, type SessionSummary } from "@/lib/chat-shape";
 import { Icon } from "@/components/icon";
@@ -40,6 +40,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
+  SidebarMenuAction,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -63,24 +64,36 @@ function SessionActions({
 }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [title, setTitle] = useState(getSessionLabel(session));
+  const [title, setTitle] = useState(session.title?.trim() || "New chat");
 
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button className="session-action-trigger" variant="ghost" size="icon-sm" aria-label="Conversation actions" title="Conversation actions" />}
+          render={
+            <SidebarMenuAction
+              className="[.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden"
+              showOnHover
+              aria-label="Conversation actions"
+              title="Conversation actions"
+            />
+          }
         >
           <Icon name="more" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="session-action-menu">
-          <DropdownMenuItem onClick={() => {
-            setTitle(getSessionLabel(session));
-            setRenameOpen(true);
-          }}>
+        <DropdownMenuContent align="end" className="w-36 min-w-36">
+          <DropdownMenuItem
+            onClick={() => {
+              setTitle(session.title?.trim() || "New chat");
+              setRenameOpen(true);
+            }}
+          >
             <Icon name="edit" /> Rename
           </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => setDeleteOpen(true)}
+          >
             <Icon name="trash" /> Delete
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -90,7 +103,9 @@ function SessionActions({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Rename conversation</DialogTitle>
-            <DialogDescription>Choose a name that helps you find this chat later.</DialogDescription>
+            <DialogDescription>
+              Choose a name that helps you find this chat later.
+            </DialogDescription>
           </DialogHeader>
           <form
             onSubmit={(event) => {
@@ -103,7 +118,9 @@ function SessionActions({
           >
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor={`session-title-${session.session_id}`}>Conversation name</FieldLabel>
+                <FieldLabel htmlFor={`session-title-${session.session_id}`}>
+                  Conversation name
+                </FieldLabel>
                 <Input
                   id={`session-title-${session.session_id}`}
                   value={title}
@@ -114,8 +131,16 @@ function SessionActions({
               </Field>
             </FieldGroup>
             <DialogFooter className="mt-5">
-              <Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={!title.trim()}>Save</Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRenameOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!title.trim()}>
+                Save
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -125,11 +150,16 @@ function SessionActions({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
-            <AlertDialogDescription>This permanently deletes the chat and its history.</AlertDialogDescription>
+            <AlertDialogDescription>
+              This permanently deletes the chat and its history.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => void onDelete(session.session_id)}>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => void onDelete(session.session_id)}
+            >
               Delete conversation
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -143,9 +173,51 @@ type WorkspaceSidebarProps = {
   sessions: SessionSummary[];
   activeSessionId: string | null;
   loading: boolean;
+  onOpenTips: () => void;
   onDeleteSession: (sessionId: string) => Promise<void>;
   onRenameSession: (sessionId: string, title: string) => Promise<void>;
 };
+
+type ConversationRowProps = {
+  session: SessionSummary;
+  active: boolean;
+  onDeleteSession: WorkspaceSidebarProps["onDeleteSession"];
+  onRenameSession: WorkspaceSidebarProps["onRenameSession"];
+};
+
+function ConversationRow({
+  session,
+  active,
+  onDeleteSession,
+  onRenameSession,
+}: ConversationRowProps) {
+  const { setOpenMobile } = useSidebar();
+
+  return (
+    <SidebarMenuItem className="session-row relative flex items-center min-h-9 border border-transparent rounded-md text-sidebar-foreground transition-[background_.15s,color_.15s] [&:hover]:bg-sidebar-accent [&:hover]:text-sidebar-accent-foreground [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:justify-center [.dark_.workspace-shell_&]:text-muted-foreground [.dark_.workspace-shell_&:hover]:bg-sidebar-accent [.dark_.workspace-shell_&:hover]:text-sidebar-accent-foreground">
+      <SidebarMenuButton
+        className="min-w-0 flex-1 flex gap-0 items-center p-[9px_10px] rounded-md text-inherit no-underline [&_span]:overflow-hidden [&_span]:whitespace-nowrap [&_span]:text-ellipsis [&_span]:text-[12px] [&_span]:leading-[1.4] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&_span]:hidden [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:justify-center [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:p-2 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&_>_svg]:block [.workspace-sidebar_&_>_svg]:hidden"
+        isActive={active}
+        render={
+          <Link
+            href={`/chat/${session.session_id}`}
+            onClick={() => setOpenMobile(false)}
+          />
+        }
+      >
+        <Icon name="chat" />
+        <span title={session.title ?? "New chat"}>
+          {getSessionLabel(session)}
+        </span>
+      </SidebarMenuButton>
+      <SessionActions
+        session={session}
+        onRename={onRenameSession}
+        onDelete={onDeleteSession}
+      />
+    </SidebarMenuItem>
+  );
+}
 
 function groupSessionsByRecency(sessions: SessionSummary[]): SessionGroup[] {
   if (sessions.length === 0) return [];
@@ -161,9 +233,20 @@ function groupSessionsByRecency(sessions: SessionSummary[]): SessionGroup[] {
     const updatedAt = new Date(session.updated_at);
     const updatedDay = Number.isNaN(updatedAt.getTime())
       ? Number.POSITIVE_INFINITY
-      : new Date(updatedAt.getFullYear(), updatedAt.getMonth(), updatedAt.getDate()).getTime();
+      : new Date(
+          updatedAt.getFullYear(),
+          updatedAt.getMonth(),
+          updatedAt.getDate(),
+        ).getTime();
     const day = Math.floor((today.getTime() - updatedDay) / 86_400_000);
-    const label = day <= 0 ? labels[0] : day === 1 ? labels[1] : day <= 7 ? labels[2] : labels[3];
+    const label =
+      day <= 0
+        ? labels[0]
+        : day === 1
+          ? labels[1]
+          : day <= 7
+            ? labels[2]
+            : labels[3];
     groups.get(label)?.push(session);
   }
 
@@ -177,140 +260,104 @@ export function WorkspaceSidebar({
   sessions,
   activeSessionId,
   loading,
+  onOpenTips,
   onDeleteSession,
   onRenameSession,
 }: WorkspaceSidebarProps) {
-  const { setOpenMobile, setOpen, state } = useSidebar();
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchInput = useRef<HTMLInputElement>(null);
-  const visibleSessions = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase();
-    if (!query) return sessions;
-    return sessions.filter((session) =>
-      getSessionLabel(session).toLocaleLowerCase().includes(query),
-    );
-  }, [searchQuery, sessions]);
-  const sessionGroups = groupSessionsByRecency(visibleSessions);
-
-  const openSearch = useCallback(() => {
-    if (state === "collapsed") setOpen(true);
-    setSearchOpen(true);
-    window.requestAnimationFrame(() => searchInput.current?.focus());
-  }, [setOpen, state]);
-
-  const closeSearch = useCallback(() => {
-    setSearchOpen(false);
-    setSearchQuery("");
-  }, []);
-
-  useEffect(() => {
-    const handleSearchShortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        openSearch();
-      }
-    };
-    window.addEventListener("keydown", handleSearchShortcut);
-    return () => window.removeEventListener("keydown", handleSearchShortcut);
-  }, [openSearch]);
+  const { setOpenMobile, state } = useSidebar();
+  const sessionGroups = groupSessionsByRecency(sessions);
 
   return (
-    <Sidebar className="workspace-sidebar" collapsible="icon">
+    <Sidebar
+      className="workspace-sidebar **:data-[sidebar=sidebar]:border-r border-r-sidebar-border **:data-[sidebar=sidebar]:bg-sidebar **:data-[sidebar=sidebar]:text-sidebar-foreground [.dark_&_[data-sidebar=sidebar]]:border-sidebar-border [.dark_&_[data-sidebar=sidebar]]:bg-sidebar [.dark_&_[data-sidebar=sidebar]]:text-sidebar-foreground"
+      collapsible="icon"
+    >
       <SidebarHeader>
-        <div className="sidebar-brand">
-          <span className="brand-mark"><Icon name="leaf" /></span>
-          <span className="brand-name">myagent</span>
-          <SidebarTrigger className="sidebar-collapse-button" aria-label="Collapse sidebar" />
+        <div className="sidebar-brand flex items-center gap-2.5 p-[4px_5px] mb-3.75 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:justify-center [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:gap-0 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:p-0">
+          <span className="inline-grid place-items-center w-7.5 h-7.5 flex-[0_0_30px] border border-sidebar-border rounded-md bg-sidebar-accent text-sidebar-foreground [&_svg]:w-4 [&_svg]:h-4 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_.sidebar-brand_&]:hidden in-[.signin-brand]:w-8.5 in-[.signin-brand]:h-8.5 in-[.signin-brand]:rounded-lg [.signin-brand_&_svg]:w-4.75 [.signin-brand_&_svg]:h-4.75">
+            <Icon name="leaf" />
+          </span>
+          <span className="block text-sidebar-foreground text-[15px] font-[650] tracking-[-.035em] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-sidebar-foreground in-[.signin-brand]:text-primary-foreground">
+            myagent
+          </span>
+          <SidebarTrigger
+            className="w-9 h-9 ml-auto border-0 rounded-md bg-transparent text-sidebar-foreground [&:hover]:bg-sidebar-accent [&:hover]:text-sidebar-accent-foreground [&_svg]:w-4.25 [&_svg]:h-4.25 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:m-0 [.dark_.workspace-shell_&:hover]:bg-sidebar-accent [.dark_.workspace-shell_&:hover]:text-sidebar-accent-foreground"
+            aria-label={
+              state === "expanded" ? "Collapse navigation" : "Expand navigation"
+            }
+            aria-expanded={state === "expanded"}
+          />
         </div>
-
-        <Button
-          className="new-chat-button"
-          variant="ghost"
-          nativeButton={false}
+        <SidebarMenuButton
           render={<Link href="/chat" onClick={() => setOpenMobile(false)} />}
+          tooltip="New chat"
         >
           <Icon name="plus" data-icon="inline-start" />
           <span>New chat</span>
-        </Button>
-
-        {searchOpen ? (
-          <div className="sidebar-search">
-            <Icon name="search" />
-            <Input
-              ref={searchInput}
-              aria-label="Search conversations"
-              placeholder="Search chats"
-              value={searchQuery}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") closeSearch();
+        </SidebarMenuButton>
+        <SidebarMenuButton
+          render={(
+            <button
+              type="button"
+              onClick={() => {
+                setOpenMobile(false);
+                onOpenTips();
               }}
             />
-            <Button
-              className="sidebar-search-close"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Close search"
-              onClick={closeSearch}
-            >
-              <Icon name="close" />
-            </Button>
-          </div>
-        ) : (
-          <Button className="search-chat-button" variant="ghost" onClick={openSearch}>
-            <Icon name="search" data-icon="inline-start" />
-            <span>Search</span>
-          </Button>
-        )}
+          )}
+          tooltip="Tips and tour"
+        >
+          <Icon name="spark" data-icon="inline-start" />
+          <span>Tips &amp; tour</span>
+        </SidebarMenuButton>
+
       </SidebarHeader>
 
       <SidebarContent>
-        {loading || visibleSessions.length === 0 ? (
+        {loading || sessions.length === 0 ? (
           <SidebarGroup>
-            <SidebarGroupLabel className="sidebar-section-label">
-              {searchQuery.trim() ? "Search results" : "Chats"}
+            <SidebarGroupLabel className="text-sidebar-foreground text-[11px] font-semibold tracking-[.015em] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-sidebar-foreground">
+              Chats
             </SidebarGroupLabel>
             <SidebarGroupContent>
               {loading ? (
-                <div className="sidebar-empty" role="status">Loading conversations…</div>
-              ) : searchQuery.trim() ? (
-                <div className="sidebar-empty">No matching conversations.</div>
+                <div
+                  className="p-[5px_8px] text-muted-foreground text-[12px] leading-[1.55] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-muted-foreground"
+                  role="status"
+                >
+                  Loading conversations…
+                </div>
               ) : sessions.length === 0 ? (
-                <div className="sidebar-empty">Your conversations will appear here.</div>
+                <div className="p-[5px_8px] text-muted-foreground text-[12px] leading-[1.55] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-muted-foreground">
+                  Your conversations will appear here.
+                </div>
               ) : null}
             </SidebarGroupContent>
           </SidebarGroup>
         ) : (
-          <SidebarGroup className="chat-history-group">
-            <SidebarGroupLabel className="sidebar-section-label">Chats</SidebarGroupLabel>
+          <SidebarGroup className="gap-1.25">
+            <SidebarGroupLabel className="m-[22px_8px_7px] text-sidebar-foreground text-[11px] font-semibold tracking-[.015em] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-sidebar-foreground">
+              Chats
+            </SidebarGroupLabel>
             {sessionGroups.map((group) => (
-              <SidebarGroup className="sidebar-history-period" key={group.label}>
-                <SidebarGroupLabel className="sidebar-period-label">{group.label}</SidebarGroupLabel>
+              <SidebarGroup className="gap-0 p-0" key={group.label}>
+                <SidebarGroupLabel className="h-7 p-[0_10px] text-muted-foreground text-[10px] font-medium tracking-[.045em] uppercase [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-muted-foreground">
+                  {group.label}
+                </SidebarGroupLabel>
                 <SidebarGroupContent>
-                  <SidebarMenu className="session-list" aria-label={`${group.label} chats`}>
-                    {group.sessions.map((session) => {
-                      const active = session.session_id === activeSessionId;
-                      return (
-                        <SidebarMenuItem className="session-row" key={session.session_id}>
-                          <SidebarMenuButton
-                            className="session-link"
-                            isActive={active}
-                            render={<Link href={`/chat/${session.session_id}`} onClick={() => setOpenMobile(false)} />}
-                          >
-                            <Icon name="chat" />
-                            <span>{getSessionLabel(session)}</span>
-                          </SidebarMenuButton>
-                          <div className="session-actions">
-                            <SessionActions
-                              session={session}
-                              onRename={onRenameSession}
-                              onDelete={onDeleteSession}
-                            />
-                          </div>
-                        </SidebarMenuItem>
-                      );
-                    })}
+                  <SidebarMenu
+                    className="grid content-start gap-0.75 overflow-auto"
+                    aria-label={`${group.label} chats`}
+                  >
+                    {group.sessions.map((session) => (
+                      <ConversationRow
+                        key={session.session_id}
+                        session={session}
+                        active={session.session_id === activeSessionId}
+                        onDeleteSession={onDeleteSession}
+                        onRenameSession={onRenameSession}
+                      />
+                    ))}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -319,18 +366,33 @@ export function WorkspaceSidebar({
         )}
       </SidebarContent>
 
-      <SidebarFooter className="sidebar-footer">
+      <SidebarFooter className="data-[sidebar=footer]:flex data-[sidebar=footer]:flex-row data-[sidebar=footer]:items-center data-[sidebar=footer]:gap-2.25 data-[sidebar=footer]:mt-auto data-[sidebar=footer]:p-2 data-[sidebar=footer]:border-t border-t-sidebar-border [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&[data-sidebar=footer]]:justify-center [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&[data-sidebar=footer]]:p-[8px_0] [.dark_.workspace-shell_&[data-sidebar=footer]]:border-sidebar-border">
         <Button
-          className="user-settings-trigger"
+          className="[.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:size-11 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:min-w-11 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:justify-center [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:p-1.25 flex w-full min-w-0 h-auto justify-start gap-2.25 p-2.5 text-left [&:hover]:bg-accent"
           variant="ghost"
           nativeButton={false}
           aria-label="User settings"
           title="User settings"
-          render={<Link href="/settings" onClick={() => setOpenMobile(false)} />}
+          render={
+            <Link href="/settings" onClick={() => setOpenMobile(false)} />
+          }
         >
-          <span className="account-avatar" aria-hidden="true">M</span>
-          <span className="user-settings-trigger-label"><strong>MyAgent account</strong><small>Settings</small></span>
-          <span className="user-settings-trigger-icon" aria-hidden="true">›</span>
+          <span
+            className="grid place-items-center w-8.5 h-8.5 border border-border rounded-full bg-muted text-muted-foreground text-[12px] font-[650] [.dark_.workspace-shell_&]:border-sidebar-border [.dark_.workspace-shell_&]:bg-sidebar-accent [.dark_.workspace-shell_&]:text-sidebar-foreground [.user-settings-account-card_span:not(&)]:text-muted-foreground [.user-settings-account-card_span:not(&)]:text-[12px]"
+            aria-hidden="true"
+          >
+            M
+          </span>
+          <span className="[.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden min-w-0 flex-1 grid gap-0.75 [&_strong]:overflow-hidden [&_strong]:text-foreground [&_strong]:text-[11px] [&_strong]:font-[550] [&_strong]:text-ellipsis [&_strong]:whitespace-nowrap [&_small]:text-muted-foreground [&_small]:text-[10px]">
+            <strong>MyAgent account</strong>
+            <small>Settings</small>
+          </span>
+          <span
+            className="[.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden text-muted-foreground text-[18px]"
+            aria-hidden="true"
+          >
+            ›
+          </span>
         </Button>
       </SidebarFooter>
     </Sidebar>

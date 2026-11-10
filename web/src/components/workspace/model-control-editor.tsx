@@ -82,13 +82,13 @@ export function ModelControlEditor({
   }
 
   return (
-    <div className="model-control-editor">
-      <div className="model-control-editor-heading">
+    <div className="flex flex-col gap-3 pt-1 [&_select]:w-full [&_select]:h-9 [&_select]:p-[0_10px] [&_select]:border [&_select]:border-border [&_select]:rounded-md [&_select]:font-[inherit] [&_select]:text-[12px] [&_select]:bg-background [&_select]:text-foreground">
+      <div className="flex items-center justify-between gap-3 text-[12px] text-foreground">
         <strong>Model settings</strong>
         <Button
           type="button"
           variant="outline"
-          className="settings-secondary"
+          className="[.provider-dialog_[data-slot=button]:not(.settings-primary):not(&)]:text-muted-foreground [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-background [.provider-dialog_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-accent [.user-settings-page_[data-slot=button]&:hover]:bg-accent"
           onClick={() => onChange([...controls, createControl()])}
         >
           Add setting
@@ -105,8 +105,8 @@ export function ModelControlEditor({
         </FieldDescription>
       )}
       {controls.map((control, index) => (
-        <div className="model-control-editor-item" key={control.id}>
-          <div className="model-control-editor-fields">
+        <div className="flex flex-col gap-2 p-3 border border-border rounded-md bg-background" key={control.id}>
+          <div className="grid grid-cols-[1fr_1fr] gap-2.5">
             <Field>
               <FieldLabel>Setting name</FieldLabel>
               <Input
@@ -177,7 +177,7 @@ export function ModelControlEditor({
           <Button
             type="button"
             variant="ghost"
-            className="provider-text-button danger"
+            className="danger min-h-7 p-[0_8px] text-[11px] text-muted-foreground [&:hover]:bg-accent [&:hover]:text-foreground [&.danger]:text-destructive [&.danger:hover]:text-destructive"
             onClick={() =>
               onChange(
                 controls.filter((_, currentIndex) => currentIndex !== index),

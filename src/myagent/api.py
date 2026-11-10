@@ -10,6 +10,8 @@ import logging
 import os
 import socket
 import uuid
+import asyncio
+from importlib.resources import files
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -19,6 +21,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from urllib.parse import urlsplit
 
@@ -42,6 +45,12 @@ from myagent.sessions import (
 )
 from myagent.settings import SQLiteUserSettingsStore
 from myagent.tools import ToolContext
+from myagent.tools.mcp import MCPServerConfig, validate_mcp_url
+from myagent.tools.skills import _skill_dirs
+
+OPENUI_SYSTEM_PROMPT = (
+    files("myagent").joinpath("prompt/openui_system_prompt.txt").read_text(encoding="utf-8")
+)
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -62,6 +71,8 @@ class CreateMessageRequest(BaseModel):
     model_id: str | None = Field(default=None, min_length=1, max_length=256)
     reasoning_effort: Literal["default", "low", "medium", "high"] | None = None
     model_controls: dict[str, str | None] = Field(default_factory=dict, max_length=12)
+    # Deprecated compatibility input. The backend always uses its packaged prompt resource.
+    openui_instructions: str | None = Field(default=None, max_length=20_000)
 
 
 class ModelSettingsDiscoveryRequest(BaseModel):
@@ -140,6 +151,58 @@ class ActiveModelProviderRequest(BaseModel):
     provider_id: str = Field(min_length=1, max_length=64)
 
 
+class LibraryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    content: str = Field(min_length=1, max_length=20000)
+    enabled: bool = True
+    built_in: bool = False
+
+
+class LibrarySettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skills: list[LibraryItem] = Field(max_length=100)
+    personas: list[LibraryItem] = Field(max_length=100)
+
+
+class MCPServerSetting(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=48, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=80)
+    transport: Literal["http"] = "http"
+    url: str = Field(min_length=8, max_length=2048)
+    enabled: bool = True
+    built_in: bool = False
+    token: str | None = Field(default=None, max_length=4096)
+    clear_token: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        try:
+            return validate_mcp_url(value)
+        except ValueError as error:
+            raise ValueError(str(error)) from error
+
+    @model_validator(mode="after")
+    def validate_bearer_transport(self) -> MCPServerSetting:
+        hostname = urlsplit(self.url).hostname
+        local_http = urlsplit(self.url).scheme == "http" and hostname in {
+            "localhost", "127.0.0.1", "::1",
+        }
+        if self.token and urlsplit(self.url).scheme != "https" and not local_http:
+            raise ValueError("Bearer tokens require HTTPS, except for loopback MCP servers.")
+        return self
+
+
+class MCPSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    builtin_enabled: bool = True
+    servers: list[MCPServerSetting] = Field(max_length=50)
+
+
 class AuthCredentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -200,7 +263,9 @@ class ToolActivity(BaseModel):
     tool_call_id: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["completed", "error"]
+    status: Literal["running", "completed", "error"]
+    sources: list[dict[str, str]] = Field(default_factory=list)
+    images: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MessageResponse(BaseModel):
@@ -225,7 +290,7 @@ def _tool_activities(events: list[dict[str, Any]]) -> list[ToolActivity]:
                 tool_call_id=call_id,
                 tool_name=tool_name,
                 arguments=arguments if isinstance(arguments, dict) else {},
-                status="completed",
+                status="running",
             )
         elif event.get("event_type") == "tool_completed" and call_id in activities:
             completed_arguments = payload.get("arguments")
@@ -234,6 +299,26 @@ def _tool_activities(events: list[dict[str, Any]]) -> list[ToolActivity]:
             }
             if isinstance(completed_arguments, dict) and completed_arguments:
                 update["arguments"] = completed_arguments
+            sources = payload.get("sources")
+            if isinstance(sources, list):
+                update["sources"] = [
+                    {key: source[key] for key in ("url", "title") if isinstance(source.get(key), str)}
+                    for source in sources
+                    if isinstance(source, dict)
+                    and isinstance(source.get("url"), str)
+                    and source["url"].startswith(("http://", "https://"))
+                ][:12]
+            images = payload.get("images")
+            if isinstance(images, list):
+                update["images"] = [
+                    {key: image[key] for key in ("url", "source_url", "title") if isinstance(image.get(key), str)}
+                    for image in images
+                    if isinstance(image, dict)
+                    and isinstance(image.get("url"), str)
+                    and image["url"].startswith("https://")
+                    and isinstance(image.get("source_url"), str)
+                    and image["source_url"].startswith("https://")
+                ][:6]
             activities[call_id] = activities[call_id].model_copy(update=update)
     return list(activities.values())
 
@@ -242,6 +327,7 @@ class HistoryMessage(BaseModel):
     index: int
     role: str
     content: str
+    tool_events: list[ToolActivity] = Field(default_factory=list)
 
 
 class SessionHistoryResponse(BaseModel):
@@ -346,8 +432,12 @@ def _deduplicate_model_providers(
         merged = dict(preferred)
         model_controls: dict[str, Any] = {}
         selections: dict[str, Any] = {}
+        models: dict[str, dict[str, Any]] = {}
         for item in [*(match for match in matches if match is not preferred), preferred]:
             model_controls.update(item.get("model_controls", {}))
+            for model in item.get("models", []):
+                if isinstance(model, dict) and isinstance(model.get("id"), str):
+                    models[model["id"]] = model
             for model_id, values in item.get("model_control_selections", {}).items():
                 existing = selections.setdefault(model_id, {})
                 existing.update(values)
@@ -355,6 +445,8 @@ def _deduplicate_model_providers(
                 removed_ids.append(str(item["id"]))
         merged["model_controls"] = model_controls
         merged["model_control_selections"] = selections
+        if models:
+            merged["models"] = list(models.values())
         merged["enabled"] = any(item.get("enabled") is True for item in matches)
         collapsed.append(merged)
         if active_provider_id in {item.get("id") for item in matches}:
@@ -601,8 +693,12 @@ def create_app(
         return providers, active
 
     def public_model_provider(owner_id: str, provider: dict[str, Any]) -> dict[str, Any]:
+        models = provider.get("models")
+        if not isinstance(models, list) or not models:
+            models = [{"id": provider["model_id"], "name": provider["model_id"]}]
         return {
             **provider,
+            "models": models,
             "model_controls": provider.get("model_controls", {}),
             "model_control_selections": provider.get("model_control_selections", {}),
             "api_key_configured": settings_store_for().has_secret(
@@ -681,6 +777,8 @@ def create_app(
             data_dir=resolved_data_dir,
             workspace_root=resolved_workspace_root / owner_key,
             persona_root=resolved_data_dir / "personas" / owner_key,
+            library=library_for(owner_id),
+            mcp_servers=mcp_servers_for(owner_id),
             agent_factory=agent_factory,
             session_scoped_context=True,
         )
@@ -688,6 +786,154 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    def library_defaults() -> dict[str, list[dict[str, Any]]]:
+        skills: list[dict[str, Any]] = []
+        for prefix, root in _skill_dirs():
+            if not root.is_dir():
+                continue
+            for folder in sorted(root.iterdir()):
+                skill_file = folder / "SKILL.md"
+                if not skill_file.is_file():
+                    continue
+                content = skill_file.read_text(encoding="utf-8")
+                name = folder.name
+                description = "Built-in skill"
+                for line in content.splitlines():
+                    if line.strip().startswith("name:"):
+                        name = line.split(":", 1)[1].strip().strip("\"'")
+                    if line.strip().lower().startswith("description:"):
+                        description = line.split(":", 1)[1].strip().strip("\"'")
+                        break
+                skills.append({"id": (prefix + folder.name).replace("/", "-"), "name": name, "description": description, "content": content, "enabled": True, "built_in": True})
+        personas = [{"id": "default", "name": "Helpful assistant", "description": "A clear, capable general-purpose assistant.", "content": "Be helpful, clear, and accurate. Ask focused questions when needed.", "enabled": True, "built_in": True}]
+        return {"skills": skills, "personas": personas}
+
+    def library_for(owner_id: str) -> dict[str, list[dict[str, Any]]]:
+        defaults = library_defaults()
+        record = settings_store_for().get(owner_id, "agent_library")
+        saved = record["values"] if record else {}
+        result: dict[str, list[dict[str, Any]]] = {}
+        for kind in ("skills", "personas"):
+            saved_items = {item["id"]: item for item in saved.get(kind, [])}
+            merged = []
+            for item in defaults[kind]:
+                stored = saved_items.pop(item["id"], {})
+                merged.append({**item, "enabled": stored.get("enabled", True)})
+            merged.extend(item for item in saved_items.values() if not item.get("built_in"))
+            result[kind] = merged
+        return result
+
+    def mcp_settings_for(owner_id: str) -> dict[str, Any]:
+        record = settings_store_for().get(owner_id, "mcp_servers")
+        saved = record["values"] if record else {}
+        builtin_enabled = saved.get("builtin_enabled", True)
+        custom = []
+        for item in saved.get("servers", []):
+            custom.append({
+                **item,
+                "built_in": False,
+                "token_configured": settings_store_for().has_secret(
+                    owner_id, "mcp_servers", f"token:{item['id']}"
+                ),
+            })
+        return {
+            "builtin": {
+                "id": "searxng",
+                "name": "SearXNG Web Search",
+                "transport": "stdio",
+                "url": os.getenv("SEARXNG_URL", "http://127.0.0.1:8080"),
+                "enabled": builtin_enabled,
+                "built_in": True,
+                "description": "Private web search and URL reading using the local SearXNG service.",
+            },
+            "servers": custom,
+        }
+
+    def mcp_servers_for(owner_id: str) -> list[MCPServerConfig]:
+        configured = mcp_settings_for(owner_id)
+        builtin = configured["builtin"]
+        servers = [MCPServerConfig(
+            id="searxng", name=builtin["name"], transport="stdio",
+            builtin=True, enabled=builtin["enabled"],
+        )]
+        for item in configured["servers"]:
+            servers.append(MCPServerConfig(
+                id=item["id"], name=item["name"], transport=item["transport"],
+                url=item["url"],
+                token=settings_store_for().get_secret(
+                    owner_id, "mcp_servers", f"token:{item['id']}"
+                ),
+                enabled=item["enabled"],
+            ))
+        return servers
+
+    @app.get("/settings/agent-library")
+    def get_agent_library(owner_id: str = Depends(current_owner)) -> dict[str, object]:
+        return library_for(owner_id)
+
+    @app.put("/settings/agent-library")
+    def save_agent_library(body: LibrarySettingsRequest, owner_id: str = Depends(current_owner)) -> dict[str, object]:
+        defaults = library_defaults()
+        submitted = {kind: [item.model_dump() for item in getattr(body, kind)] for kind in ("skills", "personas")}
+        for kind in ("skills", "personas"):
+            default_ids = {item["id"] for item in defaults[kind]}
+            seen: set[str] = set()
+            for item in submitted[kind]:
+                if item["id"] in seen:
+                    raise HTTPException(status_code=422, detail="Item IDs must be unique.")
+                seen.add(item["id"])
+                if item["built_in"] != (item["id"] in default_ids):
+                    raise HTTPException(status_code=422, detail="Built-in items cannot be added or removed.")
+                if item["id"] in default_ids:
+                    original = next(value for value in defaults[kind] if value["id"] == item["id"])
+                    if any(item[key] != original[key] for key in ("name", "description", "content")):
+                        raise HTTPException(status_code=422, detail="Built-in items cannot be edited.")
+            if not default_ids.issubset(seen):
+                raise HTTPException(status_code=422, detail="Built-in items cannot be deleted.")
+            if len(seen) != len(submitted[kind]):
+                raise HTTPException(status_code=422, detail="Item IDs must be unique.")
+        settings_store_for().save(owner_id, "agent_library", schema_version=1, values=submitted)
+        return library_for(owner_id)
+
+    @app.get("/settings/mcp-servers")
+    def get_mcp_settings(owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        return mcp_settings_for(owner_id)
+
+    @app.put("/settings/mcp-servers")
+    def save_mcp_settings(body: MCPSettingsRequest, owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        seen: set[str] = set()
+        submitted: list[dict[str, Any]] = []
+        secrets: dict[str, str] = {}
+        clear_secrets: set[str] = set()
+        old_record = settings_store_for().get(owner_id, "mcp_servers")
+        old_servers = old_record["values"].get("servers", []) if old_record else []
+        for item in body.servers:
+            if item.id == "searxng" or item.built_in or item.id in seen:
+                raise HTTPException(status_code=422, detail="Built-in IDs are reserved and custom IDs must be unique.")
+            seen.add(item.id)
+            submitted.append({
+                "id": item.id, "name": item.name.strip(),
+                "transport": item.transport, "url": item.url,
+                "enabled": item.enabled, "built_in": False,
+            })
+            secret_name = f"token:{item.id}"
+            if item.token:
+                secrets[secret_name] = item.token
+            elif item.clear_token:
+                clear_secrets.add(secret_name)
+        for previous in old_servers:
+            if previous.get("id") not in seen:
+                clear_secrets.add(f"token:{previous.get('id')}")
+        try:
+            settings_store_for().save(
+                owner_id, "mcp_servers", schema_version=1,
+                values={"builtin_enabled": body.builtin_enabled, "servers": submitted},
+                secrets=secrets, clear_secrets=tuple(clear_secrets),
+            )
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        return mcp_settings_for(owner_id)
 
     @app.get("/settings/providers")
     def list_model_providers(
@@ -730,6 +976,7 @@ def create_app(
             "name": body.name.strip(),
             "base_url": base_url,
             "model_id": body.model_id,
+            "models": catalog,
             "reasoning_effort": body.reasoning_effort,
             "enabled": body.enabled,
             "model_controls": {
@@ -810,6 +1057,7 @@ def create_app(
             "name": name,
             "base_url": base_url,
             "model_id": body.model_id,
+            "models": catalog,
             "reasoning_effort": body.reasoning_effort,
             "enabled": body.enabled,
             "model_controls": {
@@ -1107,13 +1355,14 @@ def create_app(
         providers, provider = active_model_provider(owner_id)
         if provider is None:
             raise HTTPException(status_code=409, detail="Configure a model endpoint first.")
-        api_key = store_for_settings.get_secret(
-            owner_id,
-            MODEL_PROVIDERS_NAMESPACE,
-            f"api_key:{provider['id']}",
-        )
-        catalog = discover_model_catalog(provider["base_url"], api_key)
-        if body.model_id not in {item["id"] for item in catalog}:
+        known_models = provider.get("models", [])
+        allowed_model_ids = {
+            item["id"] for item in known_models
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        if not allowed_model_ids:
+            allowed_model_ids = {provider["model_id"]}
+        if body.model_id not in allowed_model_ids:
             raise HTTPException(
                 status_code=422,
                 detail="The selected model is not available at this endpoint.",
@@ -1263,6 +1512,16 @@ def create_app(
             ]
         )
 
+    @app.delete("/sessions", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_all_sessions(
+        owner_id: str = Depends(current_owner),
+    ) -> Response:
+        try:
+            sessions_for(owner_id).delete_all_sessions()
+        except SessionBusy as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.get("/sessions/{session_id}", response_model=SessionResponse)
     def get_session(
         session_id: str,
@@ -1308,6 +1567,7 @@ def create_app(
     async def send_message(
         session_id: str,
         body: CreateMessageRequest,
+        request: Request,
         owner_id: str = Depends(current_owner),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> MessageResponse:
@@ -1333,8 +1593,14 @@ def create_app(
                     f"api_key:{provider['id']}",
                 )
                 model_id = body.model_id or provider["model_id"]
-                catalog = discover_model_catalog(provider["base_url"], api_key)
-                if model_id not in {item["id"] for item in catalog}:
+                known_models = provider.get("models", [])
+                allowed_model_ids = {
+                    item["id"] for item in known_models
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+                if not allowed_model_ids:
+                    allowed_model_ids = {provider["model_id"]}
+                if model_id not in allowed_model_ids:
                     raise HTTPException(
                         status_code=422,
                         detail="The selected model is not available at your endpoint.",
@@ -1393,6 +1659,88 @@ def create_app(
                 if reasoning_effort == "default":
                     reasoning_effort = None
             prior_event_count = len(manager.audit_events(session_id))
+            accept = request.headers.get("accept", "").lower()
+            use_sse = "text/event-stream" in accept
+            use_ndjson = "application/x-ndjson" in accept
+            if use_sse or use_ndjson:
+                async def stream_turn():
+                    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+                    def on_event(event: ai.events.AgentEvent) -> None:
+                        if isinstance(event, ai.events.TextDelta):
+                            queue.put_nowait({"type": "text_delta", "delta": event.chunk})
+                        elif isinstance(event, ai.events.ToolStart):
+                            activity = next(
+                                (item for item in _tool_activities(manager.audit_events(session_id)[prior_event_count:])
+                                 if item.tool_call_id == event.tool_call_id),
+                                ToolActivity(tool_call_id=event.tool_call_id, tool_name=event.tool_name, status="running"),
+                            )
+                            queue.put_nowait({"type": "tool_activity", "activity": activity.model_dump()})
+                        elif isinstance(event, ai.events.ToolCallResult):
+                            activities = _tool_activities(manager.audit_events(session_id)[prior_event_count:])
+                            for result in event.results:
+                                activity = next((item for item in activities if item.tool_call_id == result.tool_call_id), None)
+                                if activity is not None:
+                                    queue.put_nowait({"type": "tool_activity", "activity": activity.model_dump()})
+
+                    async def run_turn() -> None:
+                        try:
+                            answer = await manager.run_turn(
+                                session_id,
+                                body.content,
+                                model,
+                                request_id=idempotency_key,
+                                reasoning_effort=reasoning_effort,
+                                provider_params=provider_params,
+                                system_instruction=OPENUI_SYSTEM_PROMPT,
+                                on_event=on_event,
+                            )
+                            queue.put_nowait({
+                                "type": "complete",
+                                "response": answer,
+                                "tool_events": [
+                                    item.model_dump()
+                                    for item in _tool_activities(manager.audit_events(session_id)[prior_event_count:])
+                                ],
+                            })
+                        except SessionNotFound:
+                            queue.put_nowait({"type": "error", "detail": "Session not found."})
+                        except SessionBusy:
+                            queue.put_nowait({"type": "error", "detail": "Session is busy."})
+                        except (ValueError, RuntimeError) as error:
+                            queue.put_nowait({"type": "error", "detail": str(error)})
+                        except Exception:
+                            logger.exception("Streaming agent turn failed", extra={"session_id": session_id})
+                            queue.put_nowait({"type": "error", "detail": "Agent request failed."})
+                        finally:
+                            queue.put_nowait(None)
+
+                    task = asyncio.create_task(run_turn())
+                    try:
+                        while True:
+                            try:
+                                item = await asyncio.wait_for(
+                                    queue.get(), timeout=15 if use_sse else None
+                                )
+                            except asyncio.TimeoutError:
+                                yield ": keep-alive\n\n"
+                                continue
+                            if item is None:
+                                break
+                            payload = json.dumps(item, ensure_ascii=False)
+                            if use_sse:
+                                yield f"data: {payload}\n\n"
+                            else:
+                                yield payload + "\n"
+                    finally:
+                        if not task.done():
+                            task.cancel()
+
+                return StreamingResponse(
+                    stream_turn(),
+                    media_type="text/event-stream" if use_sse else "application/x-ndjson",
+                    headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+                )
             answer = await manager.run_turn(
                 session_id,
                 body.content,
@@ -1400,6 +1748,7 @@ def create_app(
                 request_id=idempotency_key,
                 reasoning_effort=reasoning_effort,
                 provider_params=provider_params,
+                system_instruction=OPENUI_SYSTEM_PROMPT,
             )
         except HTTPException:
             raise
@@ -1435,8 +1784,9 @@ def create_app(
         session_id: str,
         owner_id: str = Depends(current_owner),
     ) -> SessionHistoryResponse:
+        manager = sessions_for(owner_id)
         try:
-            state = sessions_for(owner_id).load_session(session_id)
+            state = manager.load_session(session_id)
         except SessionNotFound as error:
             raise HTTPException(status_code=404, detail="Session not found.") from error
         except SessionBusy as error:
@@ -1446,6 +1796,35 @@ def create_app(
             for index, message in enumerate(state.messages)
             if message.role in {"user", "assistant"} and message.text
         ]
+        assistant_indexes_by_hash: dict[str, list[int]] = {}
+        for index, message in enumerate(messages):
+            if message.role == "assistant":
+                digest = hashlib.sha256(message.content.encode("utf-8")).hexdigest()
+                assistant_indexes_by_hash.setdefault(digest, []).append(index)
+
+        events_by_turn: dict[str, list[dict[str, Any]]] = {}
+        for event in manager.audit_events(session_id):
+            turn_id = event.get("turn_id")
+            if isinstance(turn_id, str):
+                events_by_turn.setdefault(turn_id, []).append(event)
+
+        for events in events_by_turn.values():
+            completed = next(
+                (
+                    event.get("payload", {})
+                    for event in events
+                    if event.get("event_type") == "turn_completed"
+                ),
+                {},
+            )
+            digest = completed.get("assistant_text_sha256")
+            if not isinstance(digest, str):
+                continue
+            matching_indexes = assistant_indexes_by_hash.get(digest)
+            if not matching_indexes:
+                continue
+            message_index = matching_indexes.pop(0)
+            messages[message_index].tool_events = _tool_activities(events)
         return SessionHistoryResponse(session_id=session_id, messages=messages)
 
     return app

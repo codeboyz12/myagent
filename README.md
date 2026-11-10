@@ -1,5 +1,7 @@
 # myagent
 
+Local SearXNG web search and user-managed MCP server setup is documented in [docs/web-search.md](docs/web-search.md).
+
 **A lightweight, extensible LLM Agent built with Python.**
 
 `myagent` is a personal LLM Agent project designed to explore how Large Language Models can reason, interact with tools, and extend their capabilities through modular Skills.

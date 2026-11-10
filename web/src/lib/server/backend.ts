@@ -17,7 +17,7 @@ export async function callBackend(
   options: { authenticated?: boolean } = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
 
   if (options.authenticated !== false) {
     const token = (await cookies()).get(ACCESS_TOKEN_COOKIE)?.value;
