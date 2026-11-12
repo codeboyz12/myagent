@@ -53,6 +53,7 @@ export const modelProvidersSchema = z.object({
     base_url: z.string(),
     model_id: z.string(),
     reasoning_effort: z.enum(["default", "low", "medium", "high"]),
+    auth_type: z.enum(["api_key", "chatgpt_plan"]).optional(),
     enabled: z.boolean(),
     api_key_configured: z.boolean(),
     model_controls: z.record(z.string(), z.array(modelControlDefinitionSchema)).default({}),
@@ -81,6 +82,13 @@ export const toolActivitySchema = z.object({
 
 export type ToolActivity = z.infer<typeof toolActivitySchema>;
 
+export const turnUsageSchema = z.object({
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  tokens_per_second: z.number().nonnegative(),
+});
+export type TurnUsage = z.infer<typeof turnUsageSchema>;
+
 export const sessionHistorySchema = z.object({
   session_id: z.string().uuid(),
   messages: z.array(
@@ -100,6 +108,7 @@ export const chatRequestSchema = z.object({
   modelId: z.string().min(1).max(256).nullable().optional(),
   reasoningEffort: z.enum(["default", "low", "medium", "high"]).nullable().optional(),
   modelControls: z.record(z.string(), z.string().nullable()).optional(),
+  regeneratePrevious: z.boolean().optional(),
 });
 
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;

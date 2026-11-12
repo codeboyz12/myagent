@@ -7,7 +7,7 @@ import { apiError, callBackend, relayBackendResponse, requireSameOrigin, unavail
 const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text_delta"), delta: z.string() }),
   z.object({ type: z.literal("tool_activity"), activity: toolActivitySchema }),
-  z.object({ type: z.literal("complete"), response: z.string(), tool_events: z.array(toolActivitySchema).default([]) }),
+  z.object({ type: z.literal("complete"), response: z.string(), tool_events: z.array(toolActivitySchema).default([]), usage: z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative(), tokens_per_second: z.number().nonnegative() }).optional() }),
   z.object({ type: z.literal("error"), detail: z.string() }),
 ]);
 
@@ -44,6 +44,7 @@ export async function POST(request: Request): Promise<Response> {
           model_id: parsed.data.modelId ?? null,
           reasoning_effort: parsed.data.reasoningEffort ?? null,
           model_controls: parsed.data.modelControls ?? {},
+          regenerate_previous: parsed.data.regeneratePrevious ?? false,
         }),
         signal: request.signal,
       },
@@ -87,6 +88,7 @@ export async function POST(request: Request): Promise<Response> {
               writer.write({ type: "text-start", id: textId });
               writer.write({ type: "text-delta", id: textId, delta: event.response });
             }
+            if (event.usage) writer.write({ type: "data-turn-usage", data: event.usage });
           } else {
             finishReason = "error";
             writer.write({ type: "error", errorText: event.detail });

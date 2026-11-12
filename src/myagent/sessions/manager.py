@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import shutil
+import time
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,7 @@ from typing import Any
 
 import ai
 from ai.models import InferenceRequestParams
+from ai.providers.openai import OpenAIParams
 from ai.types.messages import Message
 
 from myagent.sessions.store import (
@@ -227,12 +231,17 @@ class SessionManager:
         *,
         fallback_model: ai.Model | None = None,
         request_id: str | None = None,
+        regenerate_previous: bool = False,
         reasoning_effort: str | None = None,
         provider_params: Mapping[str, Any] | None = None,
+        base_system_instruction: str | None = None,
         system_instruction: str | None = None,
+        chatgpt_plan: bool = False,
         on_event: Callable[[ai.events.AgentEvent], None] | None = None,
+        on_usage: Callable[[ai.Model, Any, int, str, str, str, int | None], None] | None = None,
     ) -> str:
         state = self.load_session(session_id)
+        request_id = request_id or uuid.uuid4().hex
         try:
             turn_id = self.store.begin_turn(
                 self.owner_id,
@@ -259,10 +268,28 @@ class SessionManager:
                 "model_id": model.id,
             },
         )
+        session_messages = list(state.messages)
+        if regenerate_previous:
+            if not session_messages or session_messages[-1].role != "assistant" or not any(message.role == "user" for message in session_messages[:-1]):
+                self.store.fail_turn(self.owner_id, session_id, turn_id, error="No assistant response is available to regenerate.")
+                raise ValueError("No assistant response is available to regenerate.")
+            session_messages.pop()
+        if base_system_instruction is not None:
+            # System instructions are runtime policy, not conversation history.
+            # Replace the session's saved bootstrap prompt so existing sessions
+            # receive current rules instead of stale, conflicting instructions.
+            session_messages = [
+                message for message in state.messages if message.role != "system"
+            ]
         messages = [
+            *(
+                [ai.system_message(base_system_instruction)]
+                if base_system_instruction
+                else []
+            ),
             *([ai.system_message(system_instruction)] if system_instruction else []),
-            *state.messages,
-            ai.user_message(user_text),
+            *session_messages,
+            *([] if regenerate_previous else [ai.user_message(user_text)]),
         ]
         session_scope = (
             hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24]
@@ -279,6 +306,10 @@ class SessionManager:
             library=self._library,
             mcp_servers=self._mcp_servers,
         )
+        # Session-scoped tool roots are created lazily. Ensure the allowed
+        # workspace exists before the agent's first list_files(".") call.
+        context.workspace_root.mkdir(parents=True, exist_ok=True)
+        context.persona_dir.mkdir(parents=True, exist_ok=True)
         if context.mcp_servers is not None:
             messages.insert(0, ai.system_message(MCP_SYSTEM_INSTRUCTIONS))
 
@@ -315,8 +346,25 @@ class SessionManager:
                         + "tell the user that live verification is unavailable when it matters."
                     ),
                 )
+            if chatgpt_plan:
+                # Tool configuration can add system messages after initial
+                # session preparation. Keep all plan-sharing requests free of
+                # system-role input items and combine them into instructions.
+                system_context = "\n\n".join(
+                    message.text for message in messages
+                    if message.role == "system" and message.text
+                )
+                messages = [message for message in messages if message.role != "system"]
+                provider_params = {}
+                if system_context:
+                    provider_params["instructions"] = system_context
             params = (
-                InferenceRequestParams(extra_body=dict(provider_params))
+                InferenceRequestParams(
+                    provider_params={OpenAIParams: OpenAIParams(store=False)},
+                    extra_body=dict(provider_params) or None,
+                )
+                if chatgpt_plan
+                else InferenceRequestParams(extra_body=dict(provider_params))
                 if provider_params
                 else None
             )
@@ -325,40 +373,69 @@ class SessionManager:
                     reasoning_effort
                 )
             provider_activity_seen = False
+            invocation_index = 0
 
             async def run_with(
                 selected_model: ai.Model,
             ) -> tuple[list[Message], str]:
-                nonlocal provider_activity_seen
+                nonlocal provider_activity_seen, invocation_index
                 agent = self._agent_factory(context)
                 tool_argument_chunks: dict[str, str] = {}
+                active_invocation_index: int | None = None
+                active_invocation_started: float | None = None
                 run = (
                     agent.run(selected_model, messages, params=params)
                     if params is not None
                     else agent.run(selected_model, messages)
                 )
-                async with run as stream:
-                    async for event in stream:
-                        if isinstance(
-                            event,
-                            (
-                                ai.events.TextDelta,
-                                ai.events.ReasoningDelta,
-                                ai.events.ToolStart,
-                                ai.events.ToolDelta,
-                                ai.events.ToolCallResult,
-                            ),
-                        ):
-                            provider_activity_seen = True
-                        self._record_agent_event(
-                            session_id, turn_id, event, tool_argument_chunks
-                        )
-                        if isinstance(event, ai.events.TextDelta):
-                            self.store.append_partial_text(turn_id, event.chunk)
-                        if on_event is not None:
-                            on_event(event)
+                try:
+                    async with run as stream:
+                        async for event in stream:
+                            if isinstance(event, ai.events.StreamStart):
+                                if active_invocation_index is not None and on_usage is not None:
+                                    duration = int((time.perf_counter() - (active_invocation_started or time.perf_counter())) * 1000)
+                                    on_usage(selected_model, None, active_invocation_index, turn_id, request_id, "error", duration)
+                                active_invocation_index = invocation_index
+                                invocation_index += 1
+                                active_invocation_started = time.perf_counter()
+                                if on_usage is not None:
+                                    on_usage(selected_model, None, active_invocation_index, turn_id, request_id, "running", None)
+                            elif isinstance(event, ai.events.StreamEnd):
+                                if active_invocation_index is not None and on_usage is not None:
+                                    elapsed = int((time.perf_counter() - (active_invocation_started or time.perf_counter())) * 1000)
+                                    on_usage(selected_model, event.usage, active_invocation_index, turn_id, request_id, "success", elapsed)
+                                active_invocation_index = None
+                                active_invocation_started = None
+                            if isinstance(
+                                event,
+                                (
+                                    ai.events.TextDelta,
+                                    ai.events.ReasoningDelta,
+                                    ai.events.ToolStart,
+                                    ai.events.ToolDelta,
+                                    ai.events.ToolCallResult,
+                                ),
+                            ):
+                                provider_activity_seen = True
+                            self._record_agent_event(
+                                session_id, turn_id, event, tool_argument_chunks
+                            )
+                            if isinstance(event, ai.events.TextDelta):
+                                self.store.append_partial_text(turn_id, event.chunk)
+                            if on_event is not None:
+                                on_event(event)
 
-                    return stream.messages, str(stream.output)
+                        return stream.messages, str(stream.output)
+                except asyncio.CancelledError:
+                    if on_usage is not None and active_invocation_index is not None:
+                        elapsed = int((time.perf_counter() - (active_invocation_started or time.perf_counter())) * 1000)
+                        on_usage(selected_model, None, active_invocation_index, turn_id, request_id, "cancelled", elapsed)
+                    raise
+                except Exception:
+                    if on_usage is not None and active_invocation_index is not None:
+                        elapsed = int((time.perf_counter() - (active_invocation_started or time.perf_counter())) * 1000)
+                        on_usage(selected_model, None, active_invocation_index, turn_id, request_id, "error", elapsed)
+                    raise
 
             try:
                 final_messages, assistant_text = await run_with(model)
@@ -386,6 +463,10 @@ class SessionManager:
                     },
                 )
                 final_messages, assistant_text = await run_with(fallback_model)
+
+            if regenerate_previous:
+                while len(final_messages) > 1 and final_messages[-2].role == "assistant":
+                    final_messages.pop(-2)
 
             self.store.complete_turn(
                 self.owner_id,

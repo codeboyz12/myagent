@@ -13,7 +13,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" data-openui-theme="light" className={cn("font-sans", geist.variable)}>
+    <html lang="en" data-openui-theme="light" suppressHydrationWarning className={cn("font-sans", geist.variable)}>
+      <head><script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem('myagent-theme');if(t==='dark'){document.documentElement.classList.add('dark');document.documentElement.dataset.openuiTheme='dark'}}catch{}` }} /></head>
       <body className="m-0 min-h-full bg-background text-foreground text-sm antialiased font-sans">
         <TooltipProvider>{children}</TooltipProvider>
       </body>

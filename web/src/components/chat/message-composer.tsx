@@ -13,6 +13,8 @@ import { Spinner } from "@/components/ui/spinner";
 
 type MessageComposerProps = {
   onSend: (text: string) => Promise<boolean | void>;
+  onStop?: () => void;
+  busy?: boolean;
   disabled?: boolean;
   placeholder?: string;
   value?: string;
@@ -22,6 +24,8 @@ type MessageComposerProps = {
 
 export function MessageComposer({
   onSend,
+  onStop,
+  busy = false,
   disabled = false,
   placeholder = "Message myagent…",
   value,
@@ -72,6 +76,7 @@ export function MessageComposer({
           />
           <InputGroupAddon className="composer-footer flex items-center justify-between gap-3 mt-2 p-[8px_0_0] border-t border-border max-[560px]:items-end max-[560px]:gap-2" align="block-end">
             {settingsControls}
+            {busy && onStop ? <InputGroupButton type="button" variant="outline" size="sm" onClick={onStop} aria-label="Stop generating" title="Stop generating">Stop</InputGroupButton> : null}
             <InputGroupButton
               className="send-button rounded-lg shadow-[none] [&:hover]:bg-primary border-0 bg-primary text-primary-foreground [&:hover:not(:disabled)]:bg-primary disabled:opacity-[1] disabled:bg-transparent disabled:text-muted-foreground disabled:shadow-[none] **:data-[slot=spinner]:w-4 **:data-[slot=spinner]:h-4"
               disabled={!canSend}
@@ -81,7 +86,7 @@ export function MessageComposer({
               variant="default"
               size="icon-sm"
             >
-              {sending ? (
+              {sending && !busy ? (
                 <Spinner aria-hidden="true" />
               ) : (
                 <ArrowUp aria-hidden="true" className="in-[.send-button]:w-4.75 in-[.send-button]:h-4.75" size={19} strokeWidth={2.25} />

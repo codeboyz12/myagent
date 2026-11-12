@@ -56,9 +56,24 @@ export function apiError(message: string, status: number): NextResponse {
   );
 }
 
+export function requestOrigin(request: Request): string {
+  const requestUrl = new URL(request.url);
+  const host = request.headers.get("host");
+  const forwardedProtocol = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",", 1)[0]
+    ?.trim();
+  const protocol =
+    forwardedProtocol === "http" || forwardedProtocol === "https"
+      ? forwardedProtocol
+      : requestUrl.protocol.slice(0, -1);
+  return host ? `${protocol}://${host}` : requestUrl.origin;
+}
+
 export function requireSameOrigin(request: Request): NextResponse | null {
   const origin = request.headers.get("origin");
-  if (!origin || origin !== new URL(request.url).origin) {
+
+  if (!origin || origin !== requestOrigin(request)) {
     return apiError("Cross-origin request rejected.", 403);
   }
   return null;

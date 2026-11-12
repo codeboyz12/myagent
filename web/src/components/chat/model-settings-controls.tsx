@@ -68,7 +68,7 @@ export function ModelSettingsControls({
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="min-w-64 max-w-[calc(100vw-2rem)]">
             <SelectGroup>
               {modelItems.map((item) => (
                 <SelectItem key={item.value} value={item.value}>

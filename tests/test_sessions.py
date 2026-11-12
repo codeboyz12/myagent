@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import ai
+from ai.providers.openai import OpenAIParams
 
 from myagent.sessions import (
     SQLiteSessionStore,
@@ -68,7 +69,66 @@ class FakeAgent:
         return FakeStream(messages, fail=self.fail)
 
 
+class ParamsCaptureAgent:
+    def __init__(self, context, captures):
+        self.captures = captures
+
+    def run(self, model, messages, *, params=None):
+        self.captures.append((messages, params))
+        return FakeStream(messages)
+
+
 class SessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chatgpt_plan_instructions_keep_priority_and_local_roles(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SQLiteSessionStore(Path(temporary) / "sessions.sqlite3")
+            captures = []
+            manager = SessionManager(
+                store,
+                owner_id="alice",
+                data_dir=temporary,
+                workspace_root=temporary,
+                agent_factory=lambda context: ParamsCaptureAgent(context, captures),
+            )
+            session = manager.create_session([ai.system_message("stale prompt")])
+
+            await manager.run_turn(
+                session.id,
+                "Hello",
+                SimpleNamespace(id="gpt-6-luna"),
+                request_id="oauth-turn",
+                base_system_instruction="Base application rules",
+                system_instruction="OpenUI application rules",
+                chatgpt_plan=True,
+            )
+
+            oauth_messages, oauth_params = captures[-1]
+            self.assertEqual([message.role for message in oauth_messages], ["user"])
+            self.assertEqual(oauth_messages[0].text, "Hello")
+            self.assertEqual(
+                oauth_params.extra_body["instructions"],
+                "Base application rules\n\nOpenUI application rules",
+            )
+            self.assertFalse(oauth_params.provider_params[OpenAIParams].store)
+
+            await manager.run_turn(
+                session.id,
+                "Hello again",
+                SimpleNamespace(id="local-lfm"),
+                request_id="local-turn",
+                base_system_instruction="Base application rules",
+                system_instruction="OpenUI application rules",
+            )
+
+            local_messages, local_params = captures[-1]
+            self.assertEqual(
+                [message.role for message in local_messages],
+                ["system", "system", "user", "assistant", "user"],
+            )
+            self.assertEqual(local_messages[0].text, "Base application rules")
+            self.assertEqual(local_messages[1].text, "OpenUI application rules")
+            self.assertIsNone(local_params)
+
     async def test_multi_turn_history_survives_reopening_store(self):
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "sessions.sqlite3"

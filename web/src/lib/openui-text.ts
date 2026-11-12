@@ -1,4 +1,6 @@
 const OPENUI_BLOCK = /(```openui(?:-lang)?\b[^\n]*\n)([\s\S]*?)(```|$)/gi;
+const OPENUI_FENCE = /```openui(?:-lang)?\b/i;
+const ROOT_ASSIGNMENT = /^\s*root\s*=\s*Stack\s*\(/m;
 const STRING_LITERAL = /"(?:\\.|[^"\\])*"/g;
 const POSITIONAL_ARGUMENTS: Record<string, string[]> = {
   Card: ["children", "variant", "direction", "gap", "align", "justify", "wrap"],
@@ -20,6 +22,25 @@ export function normalizeOpenUIEscapedNewlines(response: string): string {
     );
     return `${opening}${normalizeNamedArguments(normalizedProgram)}${closing}`;
   });
+}
+
+export function normalizeOpenUIResponse(response: string): string {
+  if (OPENUI_FENCE.test(response)) return response;
+
+  const codeFence = /```([^\n`]*)\n([\s\S]*?)```/g;
+  for (const match of response.matchAll(codeFence)) {
+    if (!ROOT_ASSIGNMENT.test(match[2])) continue;
+    const start = match.index ?? 0;
+    const opening = match[0].slice(0, match[0].indexOf("\n"));
+    return response.slice(0, start)
+      + match[0].replace(opening, "```openui-lang")
+      + response.slice(start + match[0].length);
+  }
+
+  if (ROOT_ASSIGNMENT.test(response.trimStart())) {
+    return `\`\`\`openui-lang\n${response.trim()}\n\`\`\``;
+  }
+  return response;
 }
 
 function findCallEnd(source: string, openIndex: number): number {
