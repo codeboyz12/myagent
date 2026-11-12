@@ -108,8 +108,9 @@ export function ModelControlEditor({
         <div className="flex flex-col gap-2 p-3 border border-border rounded-md bg-background" key={control.id}>
           <div className="grid grid-cols-[1fr_1fr] gap-2.5">
             <Field>
-              <FieldLabel>Setting name</FieldLabel>
+              <FieldLabel htmlFor={`${control.id}-name`}>Setting name</FieldLabel>
               <Input
+                id={`${control.id}-name`}
                 value={control.name}
                 placeholder="Thinking"
                 onChange={(event) =>
@@ -121,8 +122,9 @@ export function ModelControlEditor({
               />
             </Field>
             <Field>
-              <FieldLabel>Provider parameter</FieldLabel>
+              <FieldLabel htmlFor={`${control.id}-parameter`}>Provider parameter</FieldLabel>
               <Input
+                id={`${control.id}-parameter`}
                 value={control.parameter}
                 placeholder="reasoning_effort"
                 onChange={(event) =>
@@ -134,8 +136,9 @@ export function ModelControlEditor({
               />
             </Field>
             <Field>
-              <FieldLabel>Options (comma-separated)</FieldLabel>
+              <FieldLabel htmlFor={`${control.id}-options`}>Options (comma-separated)</FieldLabel>
               <Input
+                id={`${control.id}-options`}
                 value={control.options.map((option) => option.value).join(", ")}
                 placeholder="low, medium, high"
                 onChange={(event) =>
@@ -155,8 +158,9 @@ export function ModelControlEditor({
               />
             </Field>
             <Field>
-              <FieldLabel>Default</FieldLabel>
+              <FieldLabel htmlFor={`${control.id}-default`}>Default</FieldLabel>
               <select
+                id={`${control.id}-default`}
                 value={control.default_value ?? ""}
                 onChange={(event) =>
                   updateControl(index, (item) => ({

@@ -77,7 +77,10 @@ export function useModelSettings() {
 
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch("/api/model-settings", { cache: "no-store" });
+      const [response, providersResponse] = await Promise.all([
+        fetch("/api/model-settings", { cache: "no-store" }),
+        fetch("/api/model-providers", { cache: "no-store" }),
+      ]);
       if (response.status === 401) {
         router.replace("/signin");
         return;
@@ -86,7 +89,6 @@ export function useModelSettings() {
       const result = modelSettingsSchema.safeParse(await response.json());
       if (!result.success) throw new Error("Could not read model settings.");
       const settings = result.data;
-      const providersResponse = await fetch("/api/model-providers", { cache: "no-store" });
       if (!providersResponse.ok) throw new Error("Could not load your providers.");
       const providerResult = modelProvidersSchema.safeParse(await providersResponse.json());
       if (!providerResult.success) throw new Error("Could not read your providers.");

@@ -24,10 +24,10 @@
   --primary-foreground: #ffffff;
   --secondary: #f4f4f5;
   --secondary-foreground: #27272a;
-  --muted-foreground: #71717a;
+  --muted-foreground: #6f6f77;
   --accent: #f4f4f5;
   --accent-foreground: #27272a;
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.5 0.24 27.325);
   --border: #e4e4e7;
   --input: #e4e4e7;
   --ring: #a1a1aa;
@@ -50,7 +50,6 @@
 * { box-sizing: border-box; }
 html { min-height: 100%; }
 button, input, textarea { font: inherit; }
-button:not([data-slot="button"]) { color: inherit; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
@@ -140,6 +139,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  button:not([data-slot="button"]) {
+    color: inherit;
   }
   body {
     @apply bg-background text-foreground;

@@ -19,3 +19,16 @@ export async function PUT(request: Request): Promise<NextResponse> {
     }));
   } catch { return unavailableResponse(); }
 }
+
+export async function POST(request: Request): Promise<NextResponse> {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
+  let body: unknown;
+  try { body = await request.json(); }
+  catch { return apiError("Select an MCP server to check.", 400); }
+  try {
+    return relayBackendResponse(await callBackend("/settings/mcp-servers/check", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+  } catch { return unavailableResponse(); }
+}

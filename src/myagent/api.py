@@ -8,9 +8,13 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import uuid
 import asyncio
+import time
+import threading
+from datetime import UTC, date, datetime, time as datetime_time, timedelta
 from importlib.resources import files
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -24,11 +28,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from myagent.adapter.ai_sdk import (
+    ModelCatalogAuthenticationError,
     create_compatible_model,
     discover_model_catalog,
 )
+from myagent import chatgpt_plan as chatgpt_oauth
 from myagent.agents.myagent import SYSTEM_PROMPT
 from myagent.auth import (
     ACCESS_TOKEN_TTL_SECONDS,
@@ -45,7 +52,7 @@ from myagent.sessions import (
 )
 from myagent.settings import SQLiteUserSettingsStore
 from myagent.tools import ToolContext
-from myagent.tools.mcp import MCPServerConfig, validate_mcp_url
+from myagent.tools.mcp import MCPServerConfig, MCPToolAdapter, validate_mcp_url
 from myagent.tools.skills import _skill_dirs
 
 OPENUI_SYSTEM_PROMPT = (
@@ -71,8 +78,14 @@ class CreateMessageRequest(BaseModel):
     model_id: str | None = Field(default=None, min_length=1, max_length=256)
     reasoning_effort: Literal["default", "low", "medium", "high"] | None = None
     model_controls: dict[str, str | None] = Field(default_factory=dict, max_length=12)
+    regenerate_previous: bool = False
     # Deprecated compatibility input. The backend always uses its packaged prompt resource.
     openui_instructions: str | None = Field(default=None, max_length=20_000)
+
+
+class MCPConnectionCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    server_id: str = Field(min_length=1, max_length=128)
 
 
 class ModelSettingsDiscoveryRequest(BaseModel):
@@ -155,7 +168,7 @@ class LibraryItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     name: str = Field(min_length=1, max_length=80)
-    description: str = Field(default="", max_length=500)
+    description: str = Field(default="", max_length=2000)
     content: str = Field(min_length=1, max_length=20000)
     enabled: bool = True
     built_in: bool = False
@@ -323,6 +336,30 @@ def _tool_activities(events: list[dict[str, Any]]) -> list[ToolActivity]:
     return list(activities.values())
 
 
+def _provider_usage_counts(usage: Any) -> tuple[int | None, int | None, int | None, int | None]:
+    """Normalize known OpenAI-compatible usage keys without promoting defaults to facts."""
+    raw = getattr(usage, "raw", None) if usage is not None else None
+    if not isinstance(raw, dict):
+        return None, None, None, None
+
+    def raw_count(keys: tuple[str, ...]) -> int | None:
+        for key in keys:
+            if key in raw:
+                value = raw[key]
+                return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        return None
+
+    input_value = raw_count(("input_tokens", "prompt_tokens"))
+    output_value = raw_count(("output_tokens", "completion_tokens"))
+    reasoning = getattr(usage, "reasoning_tokens", None)
+    cached = getattr(usage, "cache_read_tokens", None)
+    if not isinstance(reasoning, int) or isinstance(reasoning, bool) or reasoning < 0:
+        reasoning = None
+    if not isinstance(cached, int) or isinstance(cached, bool) or cached < 0:
+        cached = None
+    return input_value, output_value, reasoning, cached
+
+
 class HistoryMessage(BaseModel):
     index: int
     role: str
@@ -406,7 +443,7 @@ def _deduplicate_model_providers(
     store: SQLiteUserSettingsStore,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Collapse repeated endpoint/model/credential entries without losing settings."""
-    groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, str | None, Any], list[dict[str, Any]]] = {}
     for provider in providers:
         api_key = store.get_secret(
             owner_id, MODEL_PROVIDERS_NAMESPACE, f"api_key:{provider['id']}"
@@ -415,6 +452,7 @@ def _deduplicate_model_providers(
             str(provider.get("base_url", "")).rstrip("/"),
             str(provider.get("model_id", "")),
             api_key,
+            provider.get("auth_type"),
         )
         groups.setdefault(identity, []).append(provider)
 
@@ -477,6 +515,8 @@ def _deduplicate_model_providers(
 MODEL_SETTINGS_NAMESPACE = "model"
 MODEL_SETTINGS_SCHEMA_VERSION = 1
 MODEL_PROVIDERS_NAMESPACE = "model-providers"
+CHATGPT_PLAN_NAMESPACE = "chatgpt-plan"
+CHATGPT_PLAN_PROVIDER_ID = "chatgpt-plan"
 
 
 def create_app(
@@ -518,6 +558,9 @@ def create_app(
     app.state.api_tokens = tokens
     app.state.model = model
     app.state.agent_factory = agent_factory
+    app.state.chatgpt_oauth_pending = {}
+    app.state.chatgpt_oauth_lock = threading.Lock()
+    app.state.chatgpt_refresh_lock = threading.Lock()
     app.state.signup_enabled = (
         signup_enabled
         if signup_enabled is not None
@@ -696,17 +739,111 @@ def create_app(
         models = provider.get("models")
         if not isinstance(models, list) or not models:
             models = [{"id": provider["model_id"], "name": provider["model_id"]}]
+        has_credentials = (
+            settings_store_for().has_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "access_token")
+            if provider.get("auth_type") == "chatgpt_plan"
+            else settings_store_for().has_secret(
+                owner_id,
+                MODEL_PROVIDERS_NAMESPACE,
+                f"api_key:{provider['id']}",
+            )
+        )
         return {
             **provider,
             "models": models,
             "model_controls": provider.get("model_controls", {}),
             "model_control_selections": provider.get("model_control_selections", {}),
-            "api_key_configured": settings_store_for().has_secret(
-                owner_id,
-                MODEL_PROVIDERS_NAMESPACE,
-                f"api_key:{provider['id']}",
-            ),
+            "api_key_configured": has_credentials,
         }
+
+    def chatgpt_oauth_redirect_uri() -> str:
+        redirect_uri = os.getenv(
+            "MYAGENT_CHATGPT_OAUTH_REDIRECT_URI",
+            f"http://127.0.0.1:{os.getenv('MYAGENT_API_PORT', '5000')}/auth/chatgpt/callback",
+        )
+        parsed = urlsplit(redirect_uri)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.path != "/auth/chatgpt/callback" or parsed.query or parsed.fragment:
+            raise RuntimeError(
+                "ChatGPT plan sign-in requires an HTTP loopback callback at 127.0.0.1/auth/chatgpt/callback."
+            )
+        return redirect_uri
+
+    def chatgpt_return_origin(value: str | None) -> str:
+        parsed = urlsplit(value or "")
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"localhost", "127.0.0.1"}
+            or parsed.port is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("ChatGPT plan sign-in is supported from the local harness only.")
+        return f"http://{parsed.netloc}"
+
+    def chatgpt_plan_credentials(owner_id: str) -> tuple[dict[str, Any], str | None]:
+        store_for_settings = settings_store_for()
+        record = store_for_settings.get(owner_id, CHATGPT_PLAN_NAMESPACE)
+        if record is None:
+            raise HTTPException(status_code=409, detail="Connect a ChatGPT plan in Settings first.")
+        values = record["values"]
+        if not isinstance(values, dict) or not isinstance(values.get("client_id"), str):
+            raise HTTPException(status_code=409, detail="Connect a ChatGPT plan in Settings first.")
+        access_token = store_for_settings.get_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "access_token")
+        if access_token is None:
+            raise HTTPException(status_code=409, detail="Reconnect your ChatGPT plan in Settings.")
+        expires_at = values.get("expires_at")
+        if isinstance(expires_at, (int, float)) and expires_at <= time.time() + 90:
+            with app.state.chatgpt_refresh_lock:
+                # A previous request may have refreshed the access token while this
+                # request waited for the lock.
+                refreshed_record = store_for_settings.get(owner_id, CHATGPT_PLAN_NAMESPACE)
+                values = refreshed_record["values"] if refreshed_record else values
+                current_token = store_for_settings.get_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "access_token")
+                expires_at = values.get("expires_at") if isinstance(values, dict) else None
+                if isinstance(expires_at, (int, float)) and expires_at > time.time() + 90 and current_token:
+                    return values, current_token
+                refresh_token = store_for_settings.get_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "refresh_token")
+                if not refresh_token:
+                    raise HTTPException(status_code=401, detail="Reconnect your ChatGPT plan in Settings.")
+                try:
+                    token_result = chatgpt_oauth.refresh_credentials(
+                        client_id=values["client_id"], refresh_token=refresh_token
+                    )
+                except RuntimeError as error:
+                    raise HTTPException(status_code=401, detail="Reconnect your ChatGPT plan in Settings.") from error
+                new_access = token_result.get("access_token")
+                new_refresh = token_result.get("refresh_token") or refresh_token
+                expires_in = token_result.get("expires_in", 3600)
+                if not isinstance(new_access, str) or not isinstance(new_refresh, str):
+                    raise HTTPException(status_code=502, detail="OpenAI returned invalid renewed credentials.")
+                values = dict(values)
+                values["expires_at"] = time.time() + (expires_in if isinstance(expires_in, (int, float)) else 3600)
+                scopes = token_result.get("scope")
+                if isinstance(scopes, str):
+                    values["scopes"] = scopes.split()
+                secrets_to_save = {"access_token": new_access, "refresh_token": new_refresh}
+                new_id_token = token_result.get("id_token")
+                if isinstance(new_id_token, str):
+                    secrets_to_save["id_token"] = new_id_token
+                store_for_settings.save(
+                    owner_id,
+                    CHATGPT_PLAN_NAMESPACE,
+                    schema_version=1,
+                    values=values,
+                    secrets=secrets_to_save,
+                )
+                return values, new_access
+        return values, access_token
+
+    def chatgpt_plan_catalog(owner_id: str) -> list[dict[str, str]]:
+        _, access_token = chatgpt_plan_credentials(owner_id)
+        try:
+            return chatgpt_oauth.fetch_plan_models(access_token)
+        except RuntimeError as error:
+            raise HTTPException(status_code=502, detail="Could not list models for this ChatGPT account.") from error
 
     def enforce_auth_rate_limit(
         request: Request, action: str, *, email: str | None = None
@@ -779,7 +916,7 @@ def create_app(
             persona_root=resolved_data_dir / "personas" / owner_key,
             library=library_for(owner_id),
             mcp_servers=mcp_servers_for(owner_id),
-            agent_factory=agent_factory,
+            agent_factory=app.state.agent_factory,
             session_scoped_context=True,
         )
 
@@ -935,6 +1072,18 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(error)) from error
         return mcp_settings_for(owner_id)
 
+    @app.post("/settings/mcp-servers/check")
+    async def check_mcp_connection(body: MCPConnectionCheckRequest, owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        server = next((item for item in mcp_servers_for(owner_id) if item.id == body.server_id and not item.builtin), None)
+        if server is None:
+            raise HTTPException(status_code=404, detail="MCP server not found.")
+        try:
+            tools = await MCPToolAdapter(timeout_seconds=10).list_tools(server)
+        except Exception as error:
+            logger.info("MCP connection check failed", extra={"event": "mcp_connection_check_failed", "server_id": server.id, "error_type": type(error).__name__})
+            return {"ok": False, "message": "Could not connect. Check the endpoint and credentials."}
+        return {"ok": True, "tool_count": len(tools)}
+
     @app.get("/settings/providers")
     def list_model_providers(
         owner_id: str = Depends(current_owner),
@@ -946,6 +1095,197 @@ def create_app(
             ],
             "active_provider_id": active,
         }
+
+    @app.get("/settings/chatgpt-plan")
+    def chatgpt_plan_status(owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        record = settings_store_for().get(owner_id, CHATGPT_PLAN_NAMESPACE)
+        values = record["values"] if record and isinstance(record.get("values"), dict) else {}
+        provider = next(
+            (item for item in model_provider_state(owner_id)[0] if item.get("id") == CHATGPT_PLAN_PROVIDER_ID),
+            None,
+        )
+        connected = bool(
+            values.get("client_id")
+            and settings_store_for().has_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "refresh_token")
+        )
+        return {
+            "connected": connected,
+            "email": values.get("email") if connected else None,
+            "provider_id": CHATGPT_PLAN_PROVIDER_ID if connected else None,
+            "enabled": bool(provider and provider.get("enabled")) if connected else False,
+            "manage_usage_url": "https://chatgpt.com/settings/usage",
+        }
+
+    @app.post("/settings/chatgpt-plan/authorize")
+    def start_chatgpt_plan_authorization(
+        request: Request,
+        owner_id: str = Depends(current_owner),
+    ) -> dict[str, str]:
+        try:
+            frontend_origin = chatgpt_return_origin(
+                request.headers.get("x-myagent-frontend-origin")
+            )
+            redirect_uri = chatgpt_oauth_redirect_uri()
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        host_file = resolved_data_dir / "chatgpt-plan-host-id"
+        host_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            descriptor = os.open(host_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as host_stream:
+                host_stream.write(f"urn:uuid:{uuid.uuid4()}\n")
+        host_id = host_file.read_text(encoding="utf-8").strip()
+        if not host_id.startswith("urn:uuid:"):
+            raise HTTPException(status_code=500, detail="The local ChatGPT host ID is invalid.")
+
+        credential_record = settings_store_for().get(owner_id, CHATGPT_PLAN_NAMESPACE)
+        credential_values = credential_record["values"] if credential_record else {}
+        client_id = credential_values.get("client_id") if isinstance(credential_values, dict) else None
+        id_token = settings_store_for().get_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "id_token") if client_id else None
+        email = credential_values.get("email") if isinstance(credential_values, dict) else None
+        try:
+            authorization = chatgpt_oauth.new_authorization(
+                client_id=client_id or "dynamic_agent_client",
+                redirect_uri=redirect_uri,
+                host_id=host_id,
+                agent_name=None if client_id else os.getenv("MYAGENT_CHATGPT_AGENT_NAME", "myagent"),
+                id_token_hint=id_token,
+                login_hint=email if isinstance(email, str) else None,
+            )
+        except RuntimeError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        pending = {
+            "owner_id": owner_id,
+            "frontend_origin": frontend_origin,
+            "client_id": client_id or "dynamic_agent_client",
+            "previous_subject": credential_values.get("subject") if isinstance(credential_values, dict) else None,
+            "nonce": authorization["nonce"],
+            "verifier": authorization["verifier"],
+            "redirect_uri": redirect_uri,
+            "created_at": time.time(),
+        }
+        with app.state.chatgpt_oauth_lock:
+            app.state.chatgpt_oauth_pending[authorization["state"]] = pending
+            expired_states = [
+                key for key, value in app.state.chatgpt_oauth_pending.items()
+                if time.time() - value["created_at"] > 600
+            ]
+            for key in expired_states:
+                app.state.chatgpt_oauth_pending.pop(key, None)
+        return {"authorization_url": authorization["authorization_url"]}
+
+    @app.get("/auth/chatgpt/callback")
+    def finish_chatgpt_plan_authorization(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        client_id: str | None = None,
+        error: str | None = None,
+    ) -> Response:
+        if not state:
+            return Response("Missing OAuth state.", status_code=400)
+        with app.state.chatgpt_oauth_lock:
+            pending = app.state.chatgpt_oauth_pending.pop(state, None)
+        if pending is None or time.time() - pending["created_at"] > 600:
+            return Response("This ChatGPT sign-in request expired. Return to myagent and try again.", status_code=400)
+        return_origin = pending["frontend_origin"]
+        query_state = "cancelled" if error == "access_denied" else "error"
+        try:
+            if error:
+                raise RuntimeError("The ChatGPT plan connection was not authorized.")
+            if not code:
+                raise RuntimeError("OpenAI did not return an authorization code.")
+            issued_client_id = client_id or pending["client_id"]
+            if pending["client_id"] == "dynamic_agent_client":
+                if not client_id or client_id == "dynamic_agent_client":
+                    raise RuntimeError("OpenAI did not complete the ChatGPT app registration.")
+            elif client_id is not None and client_id != pending["client_id"]:
+                raise RuntimeError("OpenAI returned a different ChatGPT app registration.")
+
+            tokens = chatgpt_oauth.exchange_code(
+                code=code,
+                client_id=issued_client_id,
+                redirect_uri=pending["redirect_uri"],
+                verifier=pending["verifier"],
+            )
+            id_token = tokens.get("id_token")
+            access_token = tokens.get("access_token")
+            refresh_token = tokens.get("refresh_token")
+            if not all(isinstance(value, str) and value for value in (id_token, access_token, refresh_token)):
+                raise RuntimeError("OpenAI returned incomplete ChatGPT plan credentials.")
+            verified = chatgpt_oauth.validate_id_token(
+                id_token,
+                client_id=issued_client_id,
+                nonce=pending["nonce"],
+            )
+            if pending["previous_subject"] and verified.get("sub") != pending["previous_subject"]:
+                raise RuntimeError("Choose the same ChatGPT account when reconnecting.")
+            scope_value = tokens.get("scope")
+            scopes = scope_value.split() if isinstance(scope_value, str) else []
+            if "chatgpt.tokens.use.direct" not in scopes:
+                raise RuntimeError("Enable ChatGPT plan usage in the OpenAI consent screen to continue.")
+            expires_in = tokens.get("expires_in", 3600)
+            values = {
+                "client_id": issued_client_id,
+                "subject": verified["sub"],
+                "email": verified.get("email"),
+                "issuer": verified.get("iss"),
+                "scopes": scopes,
+                "expires_at": time.time() + (expires_in if isinstance(expires_in, (int, float)) else 3600),
+            }
+            catalog = chatgpt_oauth.fetch_plan_models(access_token)
+            providers, active = model_provider_state(pending["owner_id"])
+            provider = next((item for item in providers if item.get("id") == CHATGPT_PLAN_PROVIDER_ID), None)
+            selected_model = provider.get("model_id") if provider else None
+            if selected_model not in {model["id"] for model in catalog}:
+                selected_model = catalog[0]["id"] if catalog else ""
+            plan_provider = {
+                "id": CHATGPT_PLAN_PROVIDER_ID,
+                "name": "ChatGPT plan",
+                "base_url": chatgpt_oauth.RESOURCE,
+                "model_id": selected_model,
+                "models": catalog,
+                "reasoning_effort": "default",
+                "enabled": True,
+                "auth_type": "chatgpt_plan",
+                "model_controls": {},
+                "model_control_selections": {},
+            }
+            providers = [item for item in providers if item.get("id") != CHATGPT_PLAN_PROVIDER_ID]
+            providers.append(plan_provider)
+            if active is None:
+                active = CHATGPT_PLAN_PROVIDER_ID
+            try:
+                settings_store_for().save(
+                    pending["owner_id"],
+                    CHATGPT_PLAN_NAMESPACE,
+                    schema_version=1,
+                    values=values,
+                    secrets={
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "id_token": id_token,
+                    },
+                )
+                save_model_provider_state(pending["owner_id"], providers, active)
+            except RuntimeError as storage_error:
+                raise RuntimeError("Configure MYAGENT_SETTINGS_ENCRYPTION_KEY before connecting a ChatGPT plan.") from storage_error
+            query_state = "connected"
+        except (RuntimeError, HTTPException) as failure:
+            logger.info(
+                "ChatGPT plan sign-in was not completed",
+                extra={"event": "chatgpt_plan_oauth_failed", "error_type": type(failure).__name__},
+            )
+            if error != "access_denied":
+                query_state = "error"
+        return Response(
+            status_code=303,
+            headers={"Location": f"{return_origin}/settings?chatgpt_plan={query_state}"},
+        )
 
     @app.post("/settings/providers", status_code=status.HTTP_201_CREATED)
     def create_model_provider(
@@ -961,6 +1301,8 @@ def create_app(
             api_key = body.api_key.strip() if body.api_key and body.api_key.strip() else None
             catalog = discover_model_catalog(base_url, api_key)
         except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except ModelCatalogAuthenticationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(
@@ -1034,6 +1376,11 @@ def create_app(
         )
         if index is None:
             raise HTTPException(status_code=404, detail="Provider not found.")
+        if providers[index].get("auth_type") == "chatgpt_plan":
+            raise HTTPException(
+                status_code=422,
+                detail="ChatGPT plan connections are managed through OpenAI sign-in.",
+            )
         try:
             base_url = _normalize_model_base_url(body.base_url)
             api_key = body.api_key.strip() if body.api_key and body.api_key.strip() else None
@@ -1044,6 +1391,8 @@ def create_app(
                 )
             catalog = discover_model_catalog(base_url, api_key)
         except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except ModelCatalogAuthenticationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(status_code=502, detail="Could not connect to that provider.") from error
@@ -1162,6 +1511,22 @@ def create_app(
             active = next(
                 (item["id"] for item in remaining if item.get("enabled")), None
             )
+        provider = next(item for item in providers if item.get("id") == provider_id)
+        if provider.get("auth_type") == "chatgpt_plan":
+            credential_record = settings_store_for().get(owner_id, CHATGPT_PLAN_NAMESPACE)
+            credential_values = credential_record["values"] if credential_record else {}
+            refresh_token = settings_store_for().get_secret(owner_id, CHATGPT_PLAN_NAMESPACE, "refresh_token")
+            if isinstance(credential_values, dict) and refresh_token:
+                try:
+                    chatgpt_oauth.revoke_credentials(
+                        client_id=credential_values["client_id"],
+                        refresh_token=refresh_token,
+                    )
+                except RuntimeError:
+                    logger.info(
+                        "ChatGPT plan session revocation was not confirmed",
+                        extra={"event": "chatgpt_plan_revocation_unconfirmed", "owner_id": owner_id},
+                    )
         settings_store_for().save(
             owner_id,
             MODEL_PROVIDERS_NAMESPACE,
@@ -1169,6 +1534,14 @@ def create_app(
             values={"providers": remaining},
             clear_secrets=(f"api_key:{provider_id}",),
         )
+        if provider.get("auth_type") == "chatgpt_plan":
+            settings_store_for().save(
+                owner_id,
+                CHATGPT_PLAN_NAMESPACE,
+                schema_version=1,
+                values={},
+                clear_secrets=("access_token", "refresh_token", "id_token"),
+            )
         settings_store_for().save(
             owner_id,
             MODEL_SETTINGS_NAMESPACE,
@@ -1204,11 +1577,7 @@ def create_app(
             "model_control_selections": provider.get(
                 "model_control_selections", {}
             ).get(provider["model_id"], {}),
-            "api_key_configured": settings_store_for().has_secret(
-                owner_id,
-                MODEL_PROVIDERS_NAMESPACE,
-                f"api_key:{provider['id']}",
-            ),
+            "api_key_configured": public_model_provider(owner_id, provider)["api_key_configured"],
             "active_provider_id": provider["id"],
         }
 
@@ -1221,7 +1590,7 @@ def create_app(
             base_url = _normalize_model_base_url(body.base_url)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        api_key = body.api_key or None
+        api_key = body.api_key.strip() if body.api_key and body.api_key.strip() else None
         if api_key is None:
             providers, _ = model_provider_state(owner_id)
             existing = next(
@@ -1244,6 +1613,8 @@ def create_app(
                 )
         try:
             return {"models": discover_model_catalog(base_url, api_key)}
+        except ModelCatalogAuthenticationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1281,6 +1652,8 @@ def create_app(
             )
         try:
             catalog = discover_model_catalog(base_url, api_key)
+        except ModelCatalogAuthenticationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1405,6 +1778,15 @@ def create_app(
         _, provider = active_model_provider(owner_id)
         if provider is None:
             raise HTTPException(status_code=409, detail="Configure a model endpoint first.")
+        if provider.get("auth_type") == "chatgpt_plan":
+            catalog = chatgpt_plan_catalog(owner_id)
+            if catalog:
+                provider["models"] = catalog
+                if provider.get("model_id") not in {item["id"] for item in catalog}:
+                    provider["model_id"] = catalog[0]["id"]
+                providers, active = model_provider_state(owner_id)
+                save_model_provider_state(owner_id, providers, active)
+            return {"models": catalog, "selected_model": provider["model_id"]}
         api_key = settings_store_for().get_secret(
             owner_id,
             MODEL_PROVIDERS_NAMESPACE,
@@ -1412,6 +1794,8 @@ def create_app(
         )
         try:
             catalog = discover_model_catalog(provider["base_url"], api_key)
+        except ModelCatalogAuthenticationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1512,6 +1896,221 @@ def create_app(
             ]
         )
 
+    @app.get("/usage/analytics")
+    def usage_analytics(
+        request: Request,
+        owner_id: str = Depends(current_owner),
+    ) -> dict[str, Any]:
+        params = request.query_params
+        today = datetime.now(UTC).date()
+        raw_end = params.get("to", today.isoformat())
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_end):
+            raise HTTPException(status_code=422, detail="Dates must use YYYY-MM-DD format.")
+        try:
+            end_day = date.fromisoformat(raw_end)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Dates must use YYYY-MM-DD format.") from error
+        raw_start = params.get("from", (end_day - timedelta(days=364)).isoformat())
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_start):
+            raise HTTPException(status_code=422, detail="Dates must use YYYY-MM-DD format.")
+        try:
+            start_day = date.fromisoformat(raw_start)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Dates must use YYYY-MM-DD format.") from error
+        if end_day < start_day or (end_day - start_day).days > 365:
+            raise HTTPException(status_code=422, detail="Choose a date range of at most 366 days.")
+        timezone_name = params.get("timezone", "UTC")
+        try:
+            timezone = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="Unknown timezone.") from error
+        source = params.get("source")
+        if source not in {None, "", "local", "oauth", "api"}:
+            raise HTTPException(status_code=422, detail="Unknown usage source.")
+        provider_filter = params.get("provider") or None
+        model_filter = params.get("model") or None
+        if any(value is not None and len(value) > 256 for value in (provider_filter, model_filter)):
+            raise HTTPException(status_code=422, detail="Provider and model filters must be 256 characters or fewer.")
+        start_utc = datetime.combine(start_day, datetime_time.min, timezone).astimezone(UTC).isoformat()
+        end_utc = datetime.combine(end_day + timedelta(days=1), datetime_time.min, timezone).astimezone(UTC).isoformat()
+        store = sessions_for(owner_id).store
+        usage_rows, turn_rows = store.usage_analytics_rows(
+            owner_id, start_utc, end_utc,
+            provider_id=provider_filter, model_id=model_filter, source=source or None,
+        )
+
+        def local_day(value: str) -> str:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone).date().isoformat()
+
+        turns_by_day: dict[str, list[dict[str, Any]]] = {}
+        for turn in turn_rows:
+            turns_by_day.setdefault(local_day(turn["started_at"]), []).append(turn)
+        usage_by_day: dict[str, list[dict[str, Any]]] = {}
+        for event in usage_rows:
+            usage_by_day.setdefault(local_day(event["created_at"]), []).append(event)
+        metered_turn_ids = {row["turn_id"] for row in usage_rows}
+        all_days = [start_day + timedelta(days=i) for i in range((end_day - start_day).days + 1)]
+        daily: list[dict[str, Any]] = []
+        for day in all_days:
+            key = day.isoformat()
+            events = usage_by_day.get(key, [])
+            turns = turns_by_day.get(key, [])
+            missing_turns = sum(row["id"] not in metered_turn_ids for row in turns)
+            expected = len(events) + missing_turns
+            known = all(row["input_tokens"] is not None and row["output_tokens"] is not None for row in events)
+            tokens = sum((row["input_tokens"] or 0) + (row["output_tokens"] or 0) for row in events)
+            daily.append({
+                "date": key,
+                "tokens": tokens if known and expected == len(events) else None,
+                "knownTokens": tokens,
+                "invocations": len(events),
+                "chats": len({row["session_id"] for row in turns}),
+                "messages": sum((row["user_message_count"] or 0) + (row["assistant_message_count"] or 0) for row in turns),
+                "messagesComplete": all(row["user_message_count"] is not None and row["assistant_message_count"] is not None for row in turns),
+                "active": bool(turns),
+                "complete": expected == len(events) and known,
+            })
+
+        active_days = [item["date"] for item in daily if item["active"]]
+        current_streak = longest_streak = streak = 0
+        prior_day: date | None = None
+        for raw_day in active_days:
+            current_day = date.fromisoformat(raw_day)
+            streak = streak + 1 if prior_day and current_day == prior_day + timedelta(days=1) else 1
+            longest_streak = max(longest_streak, streak)
+            prior_day = current_day
+        if active_days:
+            latest_active = date.fromisoformat(active_days[-1])
+            current_streak = longest_streak if latest_active == end_day else 0
+            if latest_active == end_day:
+                current_streak = 1
+                for previous in reversed(active_days[:-1]):
+                    if date.fromisoformat(previous) == latest_active - timedelta(days=current_streak):
+                        current_streak += 1
+                    else:
+                        break
+
+        known_total = sum(
+            (row["input_tokens"] or 0) + (row["output_tokens"] or 0)
+            for row in usage_rows
+        )
+        expected_total = len(usage_rows) + max(0, len(turn_rows) - len({row["turn_id"] for row in usage_rows}))
+        complete_total = expected_total == len(usage_rows) and all(
+            row["input_tokens"] is not None and row["output_tokens"] is not None
+            for row in usage_rows
+        )
+        complete_days = [row["tokens"] for row in daily if row["complete"]]
+        highest_complete = max(complete_days) if complete_days else None
+        session_times: dict[str, list[tuple[datetime, datetime]]] = {}
+        for turn in turn_rows:
+            if not turn["finished_at"]:
+                continue
+            started = datetime.fromisoformat(turn["started_at"].replace("Z", "+00:00"))
+            finished = datetime.fromisoformat(turn["finished_at"].replace("Z", "+00:00"))
+            session_times.setdefault(turn["session_id"], []).append((started, finished))
+        durations: list[int] = []
+        for items in session_times.values():
+            items.sort()
+            batch: list[tuple[datetime, datetime]] = []
+            for item in items:
+                if batch and item[0] - batch[-1][0] > timedelta(minutes=30):
+                    durations.append(int((max(v[1] for v in batch) - batch[0][0]).total_seconds() * 1000))
+                    batch = []
+                batch.append(item)
+            if batch:
+                durations.append(int((max(v[1] for v in batch) - batch[0][0]).total_seconds() * 1000))
+
+        models: dict[tuple[str, str], dict[str, Any]] = {}
+        event_turns: dict[tuple[str, str], set[str]] = {}
+        for row in usage_rows:
+            key = (row["provider_id"], row["model_id"])
+            item = models.setdefault(key, {
+                "providerId": row["provider_id"], "modelId": row["model_id"],
+                "modelName": row["model_name"], "source": row["source"],
+                "invocationCount": 0, "inputTokens": 0, "outputTokens": 0,
+                "inputKnown": True, "outputKnown": True,
+            })
+            item["invocationCount"] += 1
+            if row["input_tokens"] is None:
+                item["inputKnown"] = False
+            else:
+                item["inputTokens"] += row["input_tokens"]
+            if row["output_tokens"] is None:
+                item["outputKnown"] = False
+            else:
+                item["outputTokens"] += row["output_tokens"]
+            event_turns.setdefault(key, set()).add(row["turn_id"])
+        for turn in turn_rows:
+            if turn["id"] in metered_turn_ids:
+                continue
+            key = ("unknown", turn["model_id"])
+            item = models.setdefault(key, {
+                "providerId": "unknown", "modelId": turn["model_id"],
+                "modelName": turn["model_id"], "source": "unknown",
+                "invocationCount": 0, "inputTokens": 0, "outputTokens": 0,
+                "inputKnown": False, "outputKnown": False,
+            })
+            event_turns.setdefault(key, set()).add(turn["id"])
+        model_stats = []
+        for key, item in models.items():
+            input_known = item.pop("inputKnown")
+            output_known = item.pop("outputKnown")
+            input_tokens = item["inputTokens"] if input_known else None
+            output_tokens = item["outputTokens"] if output_known else None
+            item["inputTokens"] = input_tokens
+            item["outputTokens"] = output_tokens
+            item["totalTokens"] = input_tokens + output_tokens if input_tokens is not None and output_tokens is not None else None
+            model_turns = [row for row in turn_rows if row["id"] in event_turns[key]]
+            item["messageCount"] = (
+                None
+                if any(row["user_message_count"] is None or row["assistant_message_count"] is None for row in model_turns)
+                else sum(row["user_message_count"] + row["assistant_message_count"] for row in model_turns)
+            )
+            item["turnCount"] = len(event_turns[key])
+            item["tokenCoverage"] = sum(
+                1 for row in usage_rows
+                if (row["provider_id"], row["model_id"]) == key
+                and row["input_tokens"] is not None and row["output_tokens"] is not None
+            ) / item["invocationCount"] if item["invocationCount"] else 0
+            model_stats.append(item)
+        user_messages = sum(row["user_message_count"] or 0 for row in turn_rows)
+        assistant_messages = sum(row["assistant_message_count"] or 0 for row in turn_rows)
+        messages_complete = all(
+            row["user_message_count"] is not None
+            and row["assistant_message_count"] is not None
+            for row in turn_rows
+        )
+        total_messages = user_messages + assistant_messages
+        total_chats = len({row["session_id"] for row in turn_rows})
+        return {
+            "from": start_day.isoformat(), "to": end_day.isoformat(), "timezone": timezone_name,
+            "overview": {
+                "totalTokens": known_total if complete_total else None,
+                "highestDailyTokens": highest_complete,
+                "highestDailyComplete": all(
+                    row["complete"] for row in daily if row["active"]
+                ),
+                "longestActiveSessionMs": max(durations) if durations else None,
+                "currentStreak": current_streak, "longestStreak": longest_streak,
+                "activeDays": len(active_days), "totalChats": total_chats,
+                "totalMessages": total_messages, "userMessages": user_messages,
+                "assistantMessages": assistant_messages,
+            },
+            "tokenCoverage": {
+                "knownInvocations": sum(1 for row in usage_rows if row["input_tokens"] is not None and row["output_tokens"] is not None),
+                "invocations": expected_total,
+                "complete": complete_total,
+            },
+            "messageCoverage": {"complete": messages_complete},
+            "daily": daily,
+            "models": sorted(
+                model_stats,
+                key=lambda row: (row["turnCount"], row["invocationCount"]),
+                reverse=True,
+            ),
+        }
+
     @app.delete("/sessions", status_code=status.HTTP_204_NO_CONTENT)
     def delete_all_sessions(
         owner_id: str = Depends(current_owner),
@@ -1574,9 +2173,16 @@ def create_app(
         enforce_message_rate_limit(owner_id)
         manager = sessions_for(owner_id)
         provider_params: dict[str, Any] = {}
+        uses_chatgpt_plan = False
+        provider: dict[str, Any] | None = None
+        usage_request_id = idempotency_key or str(uuid.uuid4())
+        if len(usage_request_id) > 256:
+            raise HTTPException(status_code=422, detail="Idempotency key is too long.")
         try:
             if app.state.model is not None:
                 model = app.state.model
+                usage_provider_id = "local"
+                usage_source = "local"
                 reasoning_effort = body.reasoning_effort
                 if reasoning_effort == "default":
                     reasoning_effort = None
@@ -1587,12 +2193,23 @@ def create_app(
                         status_code=409,
                         detail="Enable a model provider in Settings before chatting.",
                     )
-                api_key = settings_store_for().get_secret(
-                    owner_id,
-                    MODEL_PROVIDERS_NAMESPACE,
-                    f"api_key:{provider['id']}",
-                )
+                uses_chatgpt_plan = provider.get("auth_type") == "chatgpt_plan"
+                if uses_chatgpt_plan:
+                    _, api_key = chatgpt_plan_credentials(owner_id)
+                else:
+                    api_key = settings_store_for().get_secret(
+                        owner_id,
+                        MODEL_PROVIDERS_NAMESPACE,
+                        f"api_key:{provider['id']}",
+                    )
                 model_id = body.model_id or provider["model_id"]
+                usage_provider_id = str(provider["id"])
+                provider_host = urlsplit(str(provider.get("base_url", ""))).hostname or ""
+                try:
+                    local_endpoint = ipaddress.ip_address(provider_host).is_private
+                except ValueError:
+                    local_endpoint = provider_host.lower() == "localhost" or provider_host.lower().endswith(".local")
+                usage_source = "oauth" if uses_chatgpt_plan else "local" if local_endpoint else "api"
                 known_models = provider.get("models", [])
                 allowed_model_ids = {
                     item["id"] for item in known_models
@@ -1606,58 +2223,107 @@ def create_app(
                         detail="The selected model is not available at your endpoint.",
                     )
                 model = create_compatible_model(
-                    base_url=provider["base_url"],
+                    base_url=chatgpt_oauth.RESOURCE if uses_chatgpt_plan else provider["base_url"],
                     api_key=api_key,
                     model_id=model_id,
                 )
                 model_controls = provider.get("model_controls", {}).get(model_id, [])
-                configured_control_ids = {control.get("id") for control in model_controls}
-                unknown_controls = set(body.model_controls) - configured_control_ids
-                if unknown_controls:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="One or more controls are not configured for this model.",
-                    )
-                saved_selections = provider.get("model_control_selections", {}).get(
-                    model_id, {}
-                )
-                has_reasoning_control = False
-                reasoning_effort = None
-                for control in model_controls:
-                    control_id = control["id"]
-                    parameter = control["parameter"]
-                    has_reasoning_control |= parameter == "reasoning_effort"
-                    if control_id in body.model_controls:
-                        selected_value = body.model_controls[control_id]
-                        if selected_value is None:
-                            selected_value = control.get("default_value")
-                    else:
-                        selected_value = saved_selections.get(
-                            control_id, control.get("default_value")
-                        )
-                    if selected_value is None:
-                        options = control.get("options", [])
-                        selected_value = options[0].get("value") if options else None
-                    allowed_values = {
-                        option["value"] for option in control.get("options", [])
-                    }
-                    if selected_value is not None and selected_value not in allowed_values:
+                if uses_chatgpt_plan:
+                    if model_controls or body.model_controls:
+                        raise HTTPException(status_code=422, detail="Model controls are unavailable for ChatGPT plan usage.")
+                    reasoning_effort = provider.get("reasoning_effort", "default")
+                    if reasoning_effort == "default":
+                        reasoning_effort = None
+                    model_controls = []
+                else:
+                    configured_control_ids = {control.get("id") for control in model_controls}
+                    unknown_controls = set(body.model_controls) - configured_control_ids
+                    if unknown_controls:
                         raise HTTPException(
                             status_code=422,
-                            detail=f"The selected value for {control.get('name', control_id)} is not available.",
+                            detail="One or more controls are not configured for this model.",
                         )
-                    if selected_value is None:
-                        continue
-                    if parameter == "reasoning_effort":
-                        reasoning_effort = selected_value
-                    else:
-                        provider_params[parameter] = selected_value
-                if not has_reasoning_control:
-                    reasoning_effort = body.reasoning_effort
-                    if reasoning_effort is None:
-                        reasoning_effort = provider.get("reasoning_effort", "default")
-                if reasoning_effort == "default":
+                    saved_selections = provider.get("model_control_selections", {}).get(
+                        model_id, {}
+                    )
+                    has_reasoning_control = False
                     reasoning_effort = None
+                    for control in model_controls:
+                        control_id = control["id"]
+                        parameter = control["parameter"]
+                        has_reasoning_control |= parameter == "reasoning_effort"
+                        if control_id in body.model_controls:
+                            selected_value = body.model_controls[control_id]
+                            if selected_value is None:
+                                selected_value = control.get("default_value")
+                        else:
+                            selected_value = saved_selections.get(
+                                control_id, control.get("default_value")
+                            )
+                        if selected_value is None:
+                            options = control.get("options", [])
+                            selected_value = options[0].get("value") if options else None
+                        allowed_values = {
+                            option["value"] for option in control.get("options", [])
+                        }
+                        if selected_value is not None and selected_value not in allowed_values:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=f"The selected value for {control.get('name', control_id)} is not available.",
+                            )
+                        if selected_value is None:
+                            continue
+                        if parameter == "reasoning_effort":
+                            reasoning_effort = selected_value
+                        else:
+                            provider_params[parameter] = selected_value
+                    if not has_reasoning_control:
+                        reasoning_effort = body.reasoning_effort
+                        if reasoning_effort is None:
+                            reasoning_effort = provider.get("reasoning_effort", "default")
+                    if reasoning_effort == "default":
+                        reasoning_effort = None
+            model_catalog = provider.get("models", []) if provider else []
+
+            def capture_usage(
+                selected_model: ai.Model,
+                usage: Any,
+                invocation_index: int,
+                turn_id: str,
+                request_id: str,
+                invocation_status: str,
+                duration_ms: int | None,
+            ) -> None:
+                model_id_for_event = str(selected_model.id)
+                model_name = next(
+                    (
+                        str(item.get("name"))
+                        for item in model_catalog
+                        if isinstance(item, dict)
+                        and item.get("id") == model_id_for_event
+                        and isinstance(item.get("name"), str)
+                    ),
+                    model_id_for_event,
+                )
+                input_tokens, output_tokens, reasoning_tokens, cached_input_tokens = _provider_usage_counts(usage)
+                manager.store.record_usage(
+                    owner_id,
+                    session_id,
+                    turn_id,
+                    request_id=request_id,
+                    invocation_index=invocation_index,
+                    provider_id=usage_provider_id,
+                    model_id=model_id_for_event,
+                    model_name=model_name,
+                    source=usage_source,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    reasoning_tokens=reasoning_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    duration_ms=duration_ms,
+                    status=invocation_status,
+                )
+
             prior_event_count = len(manager.audit_events(session_id))
             accept = request.headers.get("accept", "").lower()
             use_sse = "text/event-stream" in accept
@@ -1665,10 +2331,23 @@ def create_app(
             if use_sse or use_ndjson:
                 async def stream_turn():
                     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+                    usage_totals = {"input_tokens": 0, "output_tokens": 0}
+                    generation_seconds = 0.0
+                    stream_started_at: float | None = None
 
                     def on_event(event: ai.events.AgentEvent) -> None:
+                        nonlocal generation_seconds, stream_started_at
                         if isinstance(event, ai.events.TextDelta):
                             queue.put_nowait({"type": "text_delta", "delta": event.chunk})
+                        elif isinstance(event, ai.events.StreamStart):
+                            stream_started_at = time.perf_counter()
+                        elif isinstance(event, ai.events.StreamEnd):
+                            if event.usage is not None:
+                                usage_totals["input_tokens"] += event.usage.input_tokens
+                                usage_totals["output_tokens"] += event.usage.output_tokens
+                            if stream_started_at is not None:
+                                generation_seconds += max(0.0, time.perf_counter() - stream_started_at)
+                                stream_started_at = None
                         elif isinstance(event, ai.events.ToolStart):
                             activity = next(
                                 (item for item in _tool_activities(manager.audit_events(session_id)[prior_event_count:])
@@ -1689,15 +2368,27 @@ def create_app(
                                 session_id,
                                 body.content,
                                 model,
-                                request_id=idempotency_key,
+                                request_id=usage_request_id,
+                                regenerate_previous=body.regenerate_previous,
                                 reasoning_effort=reasoning_effort,
                                 provider_params=provider_params,
+                                base_system_instruction=SYSTEM_PROMPT,
                                 system_instruction=OPENUI_SYSTEM_PROMPT,
+                                chatgpt_plan=uses_chatgpt_plan,
                                 on_event=on_event,
+                                on_usage=capture_usage,
                             )
                             queue.put_nowait({
                                 "type": "complete",
                                 "response": answer,
+                                "usage": {
+                                    **usage_totals,
+                                    "tokens_per_second": round(
+                                        usage_totals["output_tokens"] / generation_seconds
+                                        if generation_seconds > 0 else 0.0,
+                                        1,
+                                    ),
+                                },
                                 "tool_events": [
                                     item.model_dump()
                                     for item in _tool_activities(manager.audit_events(session_id)[prior_event_count:])
@@ -1745,10 +2436,14 @@ def create_app(
                 session_id,
                 body.content,
                 model,
-                request_id=idempotency_key,
+                request_id=usage_request_id,
+                regenerate_previous=body.regenerate_previous,
                 reasoning_effort=reasoning_effort,
                 provider_params=provider_params,
+                base_system_instruction=SYSTEM_PROMPT,
                 system_instruction=OPENUI_SYSTEM_PROMPT,
+                chatgpt_plan=uses_chatgpt_plan,
+                on_usage=capture_usage,
             )
         except HTTPException:
             raise

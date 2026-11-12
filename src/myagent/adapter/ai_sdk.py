@@ -21,6 +21,31 @@ _MODEL_CATALOG_CACHE: dict[
 _MODEL_CATALOG_CACHE_LOCK = threading.Lock()
 
 
+class ModelCatalogAuthenticationError(RuntimeError):
+    """The endpoint rejected or requires a provider API key."""
+
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        api_key_supplied: bool,
+        provider_message: str | None = None,
+    ) -> None:
+        if not api_key_supplied:
+            message = "This endpoint requires a valid API key. Enter it in the API key field and try again."
+        elif status_code == 401:
+            message = "The endpoint rejected this API key (401). Check that the key is valid and active."
+        else:
+            message = (
+                "The endpoint denied this API key (403). Check that the key is active "
+                "and has permission to list models and use completions."
+            )
+        if provider_message:
+            message = f"{message} Endpoint response: {provider_message}"
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _fetch_model_catalog(base_url: str, api_key: str | None) -> list[dict[str, str]]:
     """Fetch model IDs and display names from an OpenAI-compatible /models API."""
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -35,6 +60,28 @@ def _fetch_model_catalog(base_url: str, api_key: str | None) -> list[dict[str, s
         UnicodeDecodeError,
         json.JSONDecodeError,
     ) as error:
+        if isinstance(error, HTTPError) and error.code in {401, 403}:
+            provider_message = None
+            try:
+                response_body = json.loads(error.read(65536).decode("utf-8"))
+                if isinstance(response_body, dict):
+                    detail = response_body.get("detail")
+                    error_payload = response_body.get("error")
+                    if isinstance(error_payload, dict):
+                        detail = error_payload.get("message") or error_payload.get("detail") or detail
+                    elif isinstance(error_payload, str):
+                        detail = error_payload
+                    if isinstance(detail, str) and detail.strip():
+                        provider_message = detail.strip()
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            if provider_message and api_key:
+                provider_message = provider_message.replace(api_key, "[REDACTED]")[:300]
+            raise ModelCatalogAuthenticationError(
+                error.code,
+                api_key_supplied=bool(api_key),
+                provider_message=provider_message,
+            ) from error
         raise RuntimeError(
             f"Could not discover models from {base_url}: {error}"
         ) from error

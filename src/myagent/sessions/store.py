@@ -167,6 +167,8 @@ class SQLiteSessionStore:
                     user_text TEXT NOT NULL,
                     partial_text TEXT NOT NULL DEFAULT '',
                     assistant_text TEXT,
+                    user_message_count INTEGER,
+                    assistant_message_count INTEGER,
                     error TEXT,
                     process_id INTEGER,
                     started_at TEXT NOT NULL,
@@ -178,6 +180,33 @@ class SQLiteSessionStore:
 
                 CREATE INDEX IF NOT EXISTS turns_session_started
                     ON turns(session_id, started_at DESC);
+
+                CREATE TABLE IF NOT EXISTS usage_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                    request_id TEXT NOT NULL,
+                    invocation_index INTEGER NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    source TEXT NOT NULL CHECK (source IN ('local', 'oauth', 'api')),
+                    operation TEXT NOT NULL DEFAULT 'agent' CHECK (operation IN ('chat', 'agent', 'tool')),
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    reasoning_tokens INTEGER,
+                    cached_input_tokens INTEGER,
+                    duration_ms INTEGER,
+                    token_source TEXT NOT NULL CHECK (token_source IN ('provider', 'unavailable')),
+                    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'success', 'error', 'cancelled')),
+                    created_at TEXT NOT NULL,
+                    UNIQUE(session_id, request_id, invocation_index)
+                );
+
+                CREATE INDEX IF NOT EXISTS usage_events_session_created
+                    ON usage_events(session_id, created_at);
+                CREATE INDEX IF NOT EXISTS usage_events_created_session
+                    ON usage_events(created_at, session_id);
 
                 CREATE TABLE IF NOT EXISTS audit_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,6 +227,26 @@ class SQLiteSessionStore:
             }
             if "custom_title" not in session_columns:
                 connection.execute("ALTER TABLE sessions ADD COLUMN custom_title TEXT")
+            turn_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(turns)")
+            }
+            for column in ("user_message_count", "assistant_message_count"):
+                if column not in turn_columns:
+                    connection.execute(f"ALTER TABLE turns ADD COLUMN {column} INTEGER")
+            usage_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(usage_events)")
+            }
+            if "status" not in usage_columns:
+                connection.execute(
+                    "ALTER TABLE usage_events ADD COLUMN status TEXT NOT NULL DEFAULT 'success'"
+                )
+            for column in ("reasoning_tokens", "cached_input_tokens", "duration_ms"):
+                if column not in usage_columns:
+                    connection.execute(f"ALTER TABLE usage_events ADD COLUMN {column} INTEGER")
+            if "operation" not in usage_columns:
+                connection.execute(
+                    "ALTER TABLE usage_events ADD COLUMN operation TEXT NOT NULL DEFAULT 'agent'"
+                )
 
     def create_session(
         self,
@@ -265,6 +314,7 @@ class SQLiteSessionStore:
             connection.execute(
                 "DELETE FROM audit_events WHERE session_id = ?", (session_id,)
             )
+            connection.execute("DELETE FROM usage_events WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
@@ -302,6 +352,7 @@ class SQLiteSessionStore:
                 raise SessionBusy("Cannot clear session data while a turn is running.")
 
             connection.execute("DELETE FROM audit_events")
+            connection.execute("DELETE FROM usage_events")
             connection.execute("DELETE FROM messages")
             connection.execute("DELETE FROM turns")
             connection.execute("DELETE FROM sessions")
@@ -328,6 +379,7 @@ class SQLiteSessionStore:
 
             for session_id in session_ids:
                 connection.execute("DELETE FROM audit_events WHERE session_id = ?", (session_id,))
+                connection.execute("DELETE FROM usage_events WHERE session_id = ?", (session_id,))
                 connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
                 connection.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
                 connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
@@ -472,6 +524,135 @@ class SQLiteSessionStore:
                 connection, session_id, turn_id, event_type, payload, _now()
             )
 
+    def record_usage(
+        self,
+        owner_id: str,
+        session_id: str,
+        turn_id: str,
+        *,
+        request_id: str,
+        invocation_index: int,
+        provider_id: str,
+        model_id: str,
+        model_name: str,
+        source: str,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        reasoning_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+        duration_ms: int | None = None,
+        status: str = "success",
+    ) -> None:
+        """Persist one provider-reported model invocation idempotently."""
+        if source not in {"local", "oauth", "api"}:
+            raise ValueError("Unsupported usage source.")
+        if status not in {"running", "success", "error", "cancelled"}:
+            raise ValueError("Unsupported invocation status.")
+        for value in (input_tokens, output_tokens, reasoning_tokens, cached_input_tokens, duration_ms):
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise ValueError("Token counts must be non-negative integers or null.")
+        timestamp = _now()
+        with self._transaction() as connection:
+            self._require_owned_session(connection, owner_id, session_id)
+            turn = connection.execute(
+                "SELECT request_id FROM turns WHERE id = ? AND session_id = ?",
+                (turn_id, session_id),
+            ).fetchone()
+            if turn is None:
+                raise SessionNotFound(session_id)
+            connection.execute(
+                """INSERT OR IGNORE INTO usage_events(
+                    id, session_id, turn_id, request_id, invocation_index,
+                    provider_id, model_id, model_name, source, input_tokens,
+                    output_tokens, reasoning_tokens, cached_input_tokens, duration_ms,
+                    token_source, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    input_tokens = COALESCE(excluded.input_tokens, usage_events.input_tokens),
+                    output_tokens = COALESCE(excluded.output_tokens, usage_events.output_tokens),
+                    reasoning_tokens = COALESCE(excluded.reasoning_tokens, usage_events.reasoning_tokens),
+                    cached_input_tokens = COALESCE(excluded.cached_input_tokens, usage_events.cached_input_tokens),
+                    duration_ms = COALESCE(excluded.duration_ms, usage_events.duration_ms),
+                    token_source = CASE
+                        WHEN excluded.input_tokens IS NOT NULL OR excluded.output_tokens IS NOT NULL
+                        THEN 'provider' ELSE usage_events.token_source END,
+                    status = excluded.status""",
+                (
+                    str(uuid.uuid5(uuid.NAMESPACE_URL,
+                        f"{session_id}:{request_id}:{invocation_index}")),
+                    session_id, turn_id, request_id, invocation_index,
+                    provider_id, model_id, model_name, source, input_tokens,
+                    output_tokens, reasoning_tokens, cached_input_tokens, duration_ms,
+                    "provider" if input_tokens is not None or output_tokens is not None else "unavailable",
+                    status,
+                    timestamp,
+                ),
+            )
+
+    def usage_analytics_rows(
+        self,
+        owner_id: str,
+        start_utc: str,
+        end_utc: str,
+        *,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        source: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return bounded, owner-scoped usage and turn rows for aggregation."""
+        with self._connection() as connection:
+            filters = ["s.owner_id = ?", "u.created_at >= ?", "u.created_at < ?"]
+            params: list[Any] = [owner_id, start_utc, end_utc]
+            if provider_id:
+                filters.append("u.provider_id = ?")
+                params.append(provider_id)
+            if model_id:
+                filters.append("u.model_id = ?")
+                params.append(model_id)
+            if source:
+                filters.append("u.source = ?")
+                params.append(source)
+            usage_rows = connection.execute(
+                """SELECT u.turn_id, u.request_id, u.invocation_index,
+                          u.provider_id, u.model_id, u.model_name, u.source,
+                          u.input_tokens, u.output_tokens, u.reasoning_tokens,
+                          u.cached_input_tokens, u.duration_ms, u.token_source, u.status, u.created_at
+                   FROM usage_events u JOIN sessions s ON s.id = u.session_id
+                   WHERE """ + " AND ".join(filters) + " ORDER BY u.created_at",
+                params,
+            ).fetchall()
+            turn_filters = ["s.owner_id = ?", "t.started_at >= ?", "t.started_at < ?"]
+            turn_params: list[Any] = [owner_id, start_utc, end_utc]
+            if provider_id or model_id or source:
+                match_filters = ["u.turn_id = t.id"]
+                match_params: list[Any] = []
+                if provider_id:
+                    match_filters.append("u.provider_id = ?")
+                    match_params.append(provider_id)
+                if model_id:
+                    match_filters.append("u.model_id = ?")
+                    match_params.append(model_id)
+                if source:
+                    match_filters.append("u.source = ?")
+                    match_params.append(source)
+                turn_filters.append(
+                    "EXISTS (SELECT 1 FROM usage_events u WHERE "
+                    + " AND ".join(match_filters) + ")"
+                )
+                turn_params.extend(match_params)
+            turn_rows = connection.execute(
+                """SELECT t.id, t.session_id, t.model_id, t.status,
+                          t.user_text, t.assistant_text, t.started_at, t.finished_at,
+                          t.user_message_count, t.assistant_message_count
+                   FROM turns t JOIN sessions s ON s.id = t.session_id
+                   WHERE """ + " AND ".join(turn_filters) + " ORDER BY t.started_at",
+                turn_params,
+            ).fetchall()
+        return (
+            [dict(row) for row in usage_rows],
+            [dict(row) for row in turn_rows],
+        )
+
     def complete_turn(
         self,
         owner_id: str,
@@ -487,11 +668,27 @@ class SQLiteSessionStore:
             turn = self._require_running_turn(connection, turn_id)
             if turn["session_id"] != session_id:
                 raise SessionNotFound(session_id)
+            previous_rows = connection.execute(
+                "SELECT body_json FROM messages WHERE session_id = ?", (session_id,)
+            ).fetchall()
+            previous_counts = {"user": 0, "assistant": 0}
+            for row in previous_rows:
+                role = json.loads(row["body_json"]).get("role")
+                if role in previous_counts:
+                    previous_counts[role] += 1
+            current_counts = {"user": 0, "assistant": 0}
+            for message in messages:
+                role = message.get("role")
+                if role in current_counts:
+                    current_counts[role] += 1
+            user_message_count = max(0, current_counts["user"] - previous_counts["user"])
+            assistant_message_count = max(0, current_counts["assistant"] - previous_counts["assistant"])
             self._replace_messages(connection, session_id, messages)
             connection.execute(
                 """UPDATE turns SET status = 'completed', assistant_text = ?,
-                   partial_text = ?, finished_at = ? WHERE id = ?""",
-                (assistant_text, assistant_text, timestamp, turn_id),
+                   partial_text = ?, user_message_count = ?, assistant_message_count = ?,
+                   finished_at = ? WHERE id = ?""",
+                (assistant_text, assistant_text, user_message_count, assistant_message_count, timestamp, turn_id),
             )
             connection.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -657,6 +854,11 @@ class SQLiteSessionStore:
                 "UPDATE turns SET status = 'interrupted', finished_at = ? "
                 "WHERE id = ?",
                 (timestamp, row["id"]),
+            )
+            connection.execute(
+                "UPDATE usage_events SET status = 'cancelled' "
+                "WHERE turn_id = ? AND status = 'running'",
+                (row["id"],),
             )
             self._append_event(
                 connection,

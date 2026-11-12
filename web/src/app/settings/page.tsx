@@ -19,6 +19,8 @@ export default function SettingsRoute() {
       providers={modelSettings.providers}
       activeProviderId={modelSettings.activeProviderId}
       models={modelSettings.models}
+      settingsLoaded={modelSettings.loaded}
+      settingsError={modelSettings.error}
       onSaved={modelSettings.refresh}
       onSignOut={() => void signOut()}
     />

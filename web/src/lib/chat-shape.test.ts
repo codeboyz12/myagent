@@ -57,7 +57,22 @@ describe("session history and AI SDK message conversion", () => {
     const history = sessionHistorySchema.parse({
       session_id: sessionId,
       messages: [
-        { index: 2, role: "assistant", content: "Second" },
+        {
+          index: 2,
+          role: "assistant",
+          content: "Second",
+          tool_events: [{
+            tool_call_id: "image-search-1",
+            tool_name: "searxng_web_search",
+            arguments: { categories: "images" },
+            status: "completed",
+            images: [{
+              url: "https://images.example.org/kyoto.jpg",
+              source_url: "https://commons.wikimedia.org/wiki/Kyoto",
+              title: "Kyoto temple",
+            }],
+          }],
+        },
         { index: 0, role: "user", content: "First" },
       ],
     });
@@ -68,7 +83,25 @@ describe("session history and AI SDK message conversion", () => {
       {
         id: `${sessionId}-2`,
         role: "assistant",
-        parts: [{ type: "text", text: "Second" }],
+        parts: [
+          { type: "text", text: "Second" },
+          {
+            type: "data-tool-activity",
+            id: "image-search-1",
+            data: {
+              tool_call_id: "image-search-1",
+              tool_name: "searxng_web_search",
+              arguments: { categories: "images" },
+              status: "completed",
+              sources: [],
+              images: [{
+                url: "https://images.example.org/kyoto.jpg",
+                source_url: "https://commons.wikimedia.org/wiki/Kyoto",
+                title: "Kyoto temple",
+              }],
+            },
+          },
+        ],
       },
       {
         id: `${sessionId}-0`,

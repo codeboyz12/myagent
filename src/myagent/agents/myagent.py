@@ -82,8 +82,11 @@ say that live information could not be verified.
 
 When the user asks for a photo of a real place, call searxng_web_search with
 categories="images", response_format="json", and a small result limit. Use
-only the returned img_src or thumbnail_src values in Markdown image syntax.
-Never invent image URLs, and identify/link the page that supplied each image.
+only returned img_src or thumbnail_src values; never invent image URLs, and
+identify/link the page that supplied each image. If the user explicitly asks
+for an OpenUI gallery, return the images with OpenUI Lang ImageGallery
+components inside the required openui-lang fence. Use Markdown image syntax
+only when the user asks for a text or Markdown answer.
 """
 
 async def myagent(

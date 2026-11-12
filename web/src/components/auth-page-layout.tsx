@@ -34,8 +34,8 @@ export function AuthPageLayout({
             <span className="inline-grid place-items-center w-7.5 h-7.5 flex-[0_0_30px] border border-sidebar-border rounded-md bg-sidebar-accent text-sidebar-foreground [&_svg]:w-4 [&_svg]:h-4 [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_.sidebar-brand_&]:hidden in-[.signin-brand]:w-8.5 in-[.signin-brand]:h-8.5 in-[.signin-brand]:rounded-lg [.signin-brand_&_svg]:w-4.75 [.signin-brand_&_svg]:h-4.75"><Icon name="leaf" /></span>
             <span className="block text-sidebar-foreground text-[15px] font-[650] tracking-[-.035em] [.workspace-shell_[data-slot=sidebar][data-collapsible=icon]_.workspace-sidebar_&]:hidden [.dark_.workspace-shell_&]:text-sidebar-foreground in-[.signin-brand]:text-primary-foreground">myagent</span>
           </div>
-          <div className="signin-story-copy relative z-1 mt-auto mb-auto [&_h1]:m-[16px_0_13px] [&_h1]:leading-[1.13] [&_h1]:tracking-tighter [&_p]:m-0 [&_p]:leading-[1.65] max-[560px]:m-[auto_0] max-[560px]:[&_p]:max-w-75 m-[auto_0] p-[42px_0] [&_h1]:max-w-[8ch] [&_h1]:text-primary-foreground [&_h1]:text-[clamp(36px,4vw,48px)] [&_h1]:font-[560] [&_p]:max-w-[30ch] [&_p]:text-muted-foreground [&_p]:text-[14px] max-[760px]:m-[auto_0] max-[760px]:p-[30px_0_12px] max-[760px]:[&_h1]:max-w-[12ch] max-[760px]:[&_h1]:text-[34px] max-[560px]:p-[24px_0_8px] max-[560px]:[&_h1]:m-[8px_0] max-[560px]:[&_h1]:text-[29px] max-[560px]:[&_p]:text-[12px]">
-            <span className="text-muted-foreground text-[9px] font-[650] tracking-[.14em] in-[.signin-story-copy]:text-muted-foreground">A SPACE TO THINK CLEARLY</span>
+          <div className="signin-story-copy relative z-1 mt-auto mb-auto [&_h1]:m-[16px_0_13px] [&_h1]:leading-[1.13] [&_h1]:tracking-tighter [&_p]:m-0 [&_p]:leading-[1.65] max-[560px]:m-[auto_0] max-[560px]:[&_p]:max-w-75 m-[auto_0] p-[42px_0] [&_h1]:max-w-[8ch] [&_h1]:text-primary-foreground [&_h1]:text-[clamp(36px,4vw,48px)] [&_h1]:font-[560] [&_p]:max-w-[30ch] [&_p]:text-primary-foreground/80 [&_p]:text-[14px] max-[760px]:m-[auto_0] max-[760px]:p-[30px_0_12px] max-[760px]:[&_h1]:max-w-[12ch] max-[760px]:[&_h1]:text-[34px] max-[560px]:p-[24px_0_8px] max-[560px]:[&_h1]:m-[8px_0] max-[560px]:[&_h1]:text-[29px] max-[560px]:[&_p]:text-[12px]">
+            <span className="text-primary-foreground/80 text-[9px] font-[650] tracking-[.14em]">A SPACE TO THINK CLEARLY</span>
             <h1>{storyHeading}</h1>
             <p>{storyDescription}</p>
           </div>
@@ -45,7 +45,7 @@ export function AuthPageLayout({
             <span className="absolute rounded-full bg-muted-foreground opacity-[.28] w-22.5 h-22.5 top-29 right-11.75" />
             <span className="absolute rounded-full bg-muted-foreground opacity-[.28] w-7 h-7 top-20.5 right-29.25" />
           </div>
-          <div className="signin-story-footer relative z-1 flex items-center gap-2 max-[560px]:hidden text-muted-foreground text-[12px] max-[760px]:hidden">
+          <div className="signin-story-footer relative z-1 flex items-center gap-2 max-[560px]:hidden text-primary-foreground/80 text-[12px] max-[760px]:hidden">
             <span className="w-1.75 h-1.75 rounded-full bg-muted-foreground ring-2 ring-ring/20 in-[.signin-story-footer]:w-1.5 in-[.signin-story-footer]:h-1.5 in-[.signin-story-footer]:shadow-[none] in-[.signin-story-footer]:bg-muted-foreground" />
             Your private AI workspace
           </div>
