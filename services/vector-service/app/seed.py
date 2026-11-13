@@ -47,7 +47,7 @@ def load_documents():
 
 def main():
     documents = load_documents()
-    
+
     print("Loading model and embedding documents...", flush=True)
     vectors = embed_documents([item["text"] for item in documents])
     vector_size = len(vectors[0])

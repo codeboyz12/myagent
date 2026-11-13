@@ -23,7 +23,14 @@ Service นี้ส่งข้อมูลที่ค้นพบกลับ
 
 ## เริ่มใช้งาน
 
-หลัง clone repository ให้เข้าโฟลเดอร์โปรเจกต์แล้วรัน:
+Clone branch นี้แล้วเข้าโฟลเดอร์ service:
+
+```powershell
+git clone --branch feature/vector-service https://github.com/codeboyz12/myagent.git
+cd myagent/services/vector-service
+```
+
+จากนั้นรัน:
 
 ```powershell
 docker compose up -d --build
