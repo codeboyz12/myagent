@@ -1,0 +1,25 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      HF_HOME: /models
+    volumes:
+      - model_cache:/models
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+  model_cache:
