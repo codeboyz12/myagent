@@ -98,12 +98,10 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
     @ai.tool
     async def retrieve_documents(query: str, top_k: int = 3, score_threshold: float | None = None) -> str:
         """Search for relevant documents from the vector store using semantic similarity."""
-        return _run_tool(
-            _retrieve_documents,
-            query=query,
-            top_k=top_k,
-            score_threshold=score_threshold,
-        )
+        try:
+            return await _retrieve_documents(query=query, top_k=top_k, score_threshold=score_threshold)
+        except Exception as error:
+            return f"Tool execution error: {error}"
 
     @ai.tool
     async def update_persona(

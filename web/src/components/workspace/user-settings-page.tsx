@@ -168,7 +168,12 @@ export function UserSettingsPage({
 }: UserSettingsPageProps) {
   const router = useRouter();
   const [section, setSection] = useState<SettingsSection>("connections");
-  const [agentSettingsTab, setAgentSettingsTab] = useState<"library" | "mcp">("library");
+  const [agentSettingsTab, setAgentSettingsTab] = useState<"library" | "mcp" | "instruction">("library");
+  const [agentInstruction, setAgentInstruction] = useState("");
+  const [agentInstructionIsDefault, setAgentInstructionIsDefault] = useState(true);
+  const [agentInstructionLoaded, setAgentInstructionLoaded] = useState(false);
+  const [agentInstructionBusy, setAgentInstructionBusy] = useState(false);
+  const [agentInstructionError, setAgentInstructionError] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [connectionType, setConnectionType] = useState<string>(CONNECTION_PRESETS[0].id);
@@ -412,6 +417,41 @@ export function UserSettingsPage({
     }
   }
 
+  async function loadAgentInstruction() {
+    if (agentInstructionLoaded) return;
+    setAgentInstructionError("");
+    try {
+      const response = await fetch("/api/agent-instruction", { cache: "no-store" });
+      if (!response.ok) throw new Error(await responseMessage(response, "Could not load agent instruction."));
+      const result = await response.json() as { instruction: string; is_default: boolean };
+      setAgentInstruction(result.instruction);
+      setAgentInstructionIsDefault(result.is_default);
+      setAgentInstructionLoaded(true);
+    } catch (reason) {
+      setAgentInstructionError(reason instanceof Error ? reason.message : "Could not load agent instruction.");
+    }
+  }
+
+  async function saveAgentInstruction() {
+    setAgentInstructionBusy(true);
+    setAgentInstructionError("");
+    try {
+      const response = await fetch("/api/agent-instruction", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: agentInstruction }),
+      });
+      if (!response.ok) throw new Error(await responseMessage(response, "Could not save agent instruction."));
+      const result = await response.json() as { instruction: string; is_default: boolean };
+      setAgentInstruction(result.instruction);
+      setAgentInstructionIsDefault(result.is_default);
+    } catch (reason) {
+      setAgentInstructionError(reason instanceof Error ? reason.message : "Could not save agent instruction.");
+    } finally {
+      setAgentInstructionBusy(false);
+    }
+  }
+
   async function deleteAllSessions() {
     setDeletingSessions(true);
     setSessionsError("");
@@ -613,9 +653,45 @@ export function UserSettingsPage({
               <div className="flex gap-1.5 border-b border-border [&_button]:p-[8px_12px] [&_button]:border-0 [&_button]:border-b-2 [&_button]:border-b-transparent [&_button]:bg-transparent [&_button]:cursor-pointer [&_button]:font-[inherit] [&_button]:text-[12px] [&_button]:text-muted-foreground [&_button[aria-selected=true]]:border-border [&_button[aria-selected=true]]:text-foreground" role="tablist" aria-label="Agent settings" onKeyDown={handleTabListKeyDown}>
                 <button id="agent-plugin-tab" aria-controls="agent-settings-panel" tabIndex={agentSettingsTab === "library" ? 0 : -1} type="button" role="tab" aria-selected={agentSettingsTab === "library"} onClick={() => setAgentSettingsTab("library")}>Plugin</button>
                 <button id="agent-mcp-tab" aria-controls="agent-settings-panel" tabIndex={agentSettingsTab === "mcp" ? 0 : -1} type="button" role="tab" aria-selected={agentSettingsTab === "mcp"} onClick={() => setAgentSettingsTab("mcp")}>MCP servers</button>
+                <button id="agent-instruction-tab" aria-controls="agent-settings-panel" tabIndex={agentSettingsTab === "instruction" ? 0 : -1} type="button" role="tab" aria-selected={agentSettingsTab === "instruction"} onClick={() => { setAgentSettingsTab("instruction"); void loadAgentInstruction(); }}>Instruction</button>
               </div>
-              <div role="tabpanel" id="agent-settings-panel" aria-labelledby={agentSettingsTab === "library" ? "agent-plugin-tab" : "agent-mcp-tab"} tabIndex={0}>
-                {agentSettingsTab === "library" ? <AgentLibrarySettings /> : <MCPServerSettings />}
+              <div role="tabpanel" id="agent-settings-panel" aria-labelledby={agentSettingsTab === "library" ? "agent-plugin-tab" : agentSettingsTab === "mcp" ? "agent-mcp-tab" : "agent-instruction-tab"} tabIndex={0}>
+                {agentSettingsTab === "library" ? <AgentLibrarySettings /> : agentSettingsTab === "mcp" ? <MCPServerSettings /> : (
+                  <div className="flex flex-col gap-5">
+                    <div>
+                      <h2 className="m-0 text-[19px] font-semibold tracking-tight text-foreground">Agent Instruction</h2>
+                      <p className="mt-1 max-w-[560px] text-[13px] leading-[1.6] text-muted-foreground">Customize the system prompt that controls how the agent behaves. This applies to all new conversations.</p>
+                    </div>
+                    {agentInstructionError && <Alert variant="destructive"><AlertDescription>{agentInstructionError}</AlertDescription></Alert>}
+                    {!agentInstructionLoaded && !agentInstructionError ? (
+                      <div className="flex items-center gap-3 py-4" role="status">
+                        <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" aria-hidden="true" />
+                        <span className="text-[12px] text-muted-foreground">Loading…</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Field>
+                          <FieldLabel htmlFor="agent-instruction-textarea">System prompt</FieldLabel>
+                          <textarea
+                            id="agent-instruction-textarea"
+                            className="w-full min-h-[320px] resize-y rounded-md border border-input bg-background p-[9px_10px] font-[inherit] text-[12px] text-foreground leading-[1.6] placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                            value={agentInstruction}
+                            onChange={(e) => setAgentInstruction(e.target.value)}
+                            spellCheck={false}
+                            disabled={agentInstructionBusy}
+                          />
+                          {agentInstructionIsDefault && <FieldDescription>This is the default system prompt.</FieldDescription>}
+                        </Field>
+                        <div className="flex justify-end gap-2">
+                          {!agentInstructionIsDefault && (
+                            <Button type="button" variant="outline" className="[.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&:hover]:bg-accent" disabled={agentInstructionBusy} onClick={async () => { const response = await fetch("/api/agent-instruction", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: "" }) }); if (response.ok) { const result = await response.json() as { instruction: string; is_default: boolean }; setAgentInstruction(result.instruction); setAgentInstructionIsDefault(result.is_default); } }}>Reset to default</Button>
+                          )}
+                          <Button type="button" className="settings-primary [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-primary [.user-settings-page_[data-slot=button]&]:text-primary-foreground [.user-settings-page_[data-slot=button]&:hover]:bg-primary" disabled={agentInstructionBusy || !agentInstruction.trim()} onClick={() => void saveAgentInstruction()}>{agentInstructionBusy ? "Saving…" : "Save instruction"}</Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </section>
           ) : null}

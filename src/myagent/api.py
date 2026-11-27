@@ -1033,6 +1033,26 @@ def create_app(
         settings_store_for().save(owner_id, "agent_library", schema_version=1, values=submitted)
         return library_for(owner_id)
 
+    def agent_instruction_for(owner_id: str) -> str:
+        record = settings_store_for().get(owner_id, "agent_instruction")
+        if record and record.get("values", {}).get("instruction"):
+            return record["values"]["instruction"]
+        return SYSTEM_PROMPT
+
+    @app.get("/settings/agent-instruction")
+    def get_agent_instruction(owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        record = settings_store_for().get(owner_id, "agent_instruction")
+        custom = record.get("values", {}).get("instruction") if record else None
+        return {"instruction": custom or SYSTEM_PROMPT, "is_default": not custom}
+
+    @app.put("/settings/agent-instruction")
+    def save_agent_instruction(body: dict[str, Any], owner_id: str = Depends(current_owner)) -> dict[str, Any]:
+        instruction = body.get("instruction", "").strip()
+        settings_store_for().save(owner_id, "agent_instruction", schema_version=1, values={"instruction": instruction if instruction != SYSTEM_PROMPT else ""})
+        record = settings_store_for().get(owner_id, "agent_instruction")
+        custom = record.get("values", {}).get("instruction") if record else None
+        return {"instruction": custom or SYSTEM_PROMPT, "is_default": not custom}
+
     @app.get("/settings/mcp-servers")
     def get_mcp_settings(owner_id: str = Depends(current_owner)) -> dict[str, Any]:
         return mcp_settings_for(owner_id)
@@ -1882,7 +1902,7 @@ def create_app(
         owner_id: str = Depends(current_owner),
     ) -> SessionResponse:
         manager = sessions_for(owner_id)
-        summary = manager.create_session([ai.system_message(SYSTEM_PROMPT)])
+        summary = manager.create_session([ai.system_message(agent_instruction_for(owner_id))])
         return _session_response(summary)
 
     @app.get("/sessions", response_model=SessionListResponse)
@@ -2372,7 +2392,7 @@ def create_app(
                                 regenerate_previous=body.regenerate_previous,
                                 reasoning_effort=reasoning_effort,
                                 provider_params=provider_params,
-                                base_system_instruction=SYSTEM_PROMPT,
+                                base_system_instruction=agent_instruction_for(owner_id),
                                 system_instruction=None,
                                 chatgpt_plan=uses_chatgpt_plan,
                                 on_event=on_event,

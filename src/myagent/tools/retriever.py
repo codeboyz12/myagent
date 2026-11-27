@@ -8,14 +8,14 @@ import httpx
 VECTOR_SERVICE_URL = os.getenv("VECTOR_SERVICE_URL", "http://localhost:8000")
 
 
-def retrieve_documents(query: str, top_k: int = 3, score_threshold: float | None = None) -> str:
+async def retrieve_documents(query: str, top_k: int = 3, score_threshold: float | None = None) -> str:
     payload: dict = {"query": query, "top_k": top_k}
     if score_threshold is not None:
         payload["score_threshold"] = score_threshold
 
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(f"{VECTOR_SERVICE_URL}/retrieve", json=payload)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(f"{VECTOR_SERVICE_URL}/retrieve", json=payload)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         return f"Vector service error {exc.response.status_code}: {exc.response.text}"
