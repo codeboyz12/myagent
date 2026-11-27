@@ -2,8 +2,19 @@ import os
 from pathlib import Path
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[3]
-SKILLS_DIR = PROJECT_DIR / "skills"
+def _default_skills_dir() -> Path:
+    env = os.environ.get("MYAGENT_SKILLS_DIR")
+    if env:
+        return Path(env)
+    # When running from source (dev), __file__ is src/myagent/tools/skills.py → parents[3] = project root.
+    # When installed as a package, __file__ is in site-packages and parents[3] is wrong,
+    # so we fall back to /app/skills (the Docker workdir).
+    candidate = Path(__file__).resolve().parents[3] / "skills"
+    if candidate.is_dir():
+        return candidate
+    return Path("/app/skills")
+
+SKILLS_DIR = _default_skills_dir()
 
 
 def _system_skills_dir() -> Path:
