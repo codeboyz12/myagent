@@ -69,6 +69,7 @@ export const toolActivitySchema = z.object({
   tool_name: z.string(),
   arguments: z.record(z.string(), z.unknown()),
   status: z.enum(["running", "completed", "error"]),
+  retrieval_result: z.string().nullish(),
   sources: z.array(z.object({
     url: z.string().url().refine((value) => value.startsWith("https://") || value.startsWith("http://")),
     title: z.string().optional(),

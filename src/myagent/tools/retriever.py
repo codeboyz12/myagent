@@ -29,5 +29,7 @@ async def retrieve_documents(query: str, top_k: int = 3, score_threshold: float 
     lines = []
     for i, r in enumerate(results, 1):
         meta = r.get("metadata", {})
-        lines.append(f"[{i}] score={r['score']:.3f} | {r['text']} | metadata={meta}")
+        lines.append(
+            f"[{i}] id={r['id']} | score={r['score']:.3f} | {r['text']} | metadata={meta}"
+        )
     return "\n".join(lines)

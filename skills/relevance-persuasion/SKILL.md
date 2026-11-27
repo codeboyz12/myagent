@@ -30,7 +30,8 @@ Use this skill when:
 
 - Explain benefits in the person's context.
 - Prefer concrete examples over vague claims.
-- Connect features to practical outcomes.
+- Connect documented features to the person's stated needs when the evidence
+  supports the connection. Leave undocumented use cases and benefits open.
 - Avoid exaggerated promises.
 - Do not invent personal motivations.
 - Respect the person's freedom to disagree or decline.

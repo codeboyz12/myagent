@@ -31,5 +31,38 @@
       "category": "รองเท้าเดินป่า",
       "source": "sample-products"
     }
+  },
+  {
+    "id": 4,
+    "text": "รองเท้า Road D ราคา 1590 บาท รองเท้าวิ่งสำหรับพื้นถนนและลู่วิ่ง พื้นกลางบุโฟม และหน้าผ้าตาข่าย",
+    "metadata": {
+      "product_id": "road-d",
+      "name": "Road D",
+      "price": 1590,
+      "category": "รองเท้าวิ่ง",
+      "source": "sample-products"
+    }
+  },
+  {
+    "id": 5,
+    "text": "รองเท้า Ridge E ราคา 2190 บาท รองเท้าวิ่งเทรลสำหรับทางดินและกรวด พื้นยางมีดอกเพื่อช่วยยึดเกาะ และมีแผ่นป้องกันปลายเท้า",
+    "metadata": {
+      "product_id": "ridge-e",
+      "name": "Ridge E",
+      "price": 2190,
+      "category": "รองเท้าวิ่งเทรล",
+      "source": "sample-products"
+    }
+  },
+  {
+    "id": 6,
+    "text": "รองเท้า Walk F ราคา 990 บาท รองเท้าเดินสำหรับใช้ในชีวิตประจำวัน หน้าผ้าตาข่ายและแผ่นรองเท้าถอดได้",
+    "metadata": {
+      "product_id": "walk-f",
+      "name": "Walk F",
+      "price": 990,
+      "category": "รองเท้าเดิน",
+      "source": "sample-products"
+    }
   }
 ]

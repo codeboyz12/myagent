@@ -22,7 +22,7 @@ Use this skill when:
 
 1. Understand the product or idea being presented.
 2. Identify relevant alternatives.
-3. Retrieve or verify comparison information when necessary.
+3. Use knowledge-base documents retrieved for the current product comparison.
 4. Identify criteria relevant to the person's stated priorities.
 5. Compare advantages and limitations.
 6. Explain the trade-offs clearly.
@@ -44,8 +44,10 @@ Only use criteria relevant to the current context.
 
 ## Guidelines
 
-- Use accurate and verifiable information.
-- Do not invent competitor specifications or prices.
+- Ground prices, features, and listed uses in the retrieved documents.
+- Mark a missing criterion as unspecified in the knowledge base.
+- Explain the documented facts behind the recommendation. Rank products only
+  on criteria supported by the documents. Leave unverified use cases open.
 - Do not hide meaningful limitations.
 - Do not claim that one product is universally better.
 - Explain when evidence is incomplete.

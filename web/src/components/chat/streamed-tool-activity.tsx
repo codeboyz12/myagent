@@ -67,6 +67,9 @@ export function StreamedToolActivity({ activities, busy }: { activities: ToolAct
                     {Object.keys(activity.arguments).length > 0 && (
                       <pre className="m-0 max-w-full overflow-x-auto rounded-md bg-muted p-2 text-[10px] leading-[1.5] text-foreground">{JSON.stringify(activity.arguments, null, 2)}</pre>
                     )}
+                    {activity.retrieval_result && (
+                      <pre className="m-0 mt-1 whitespace-pre-wrap break-words rounded-md bg-muted p-2">{activity.retrieval_result}</pre>
+                    )}
                   </TraceCollapsibleContent>
                 </TraceCollapsible>
               </Trace>

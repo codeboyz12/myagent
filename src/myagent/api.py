@@ -279,6 +279,7 @@ class ToolActivity(BaseModel):
     status: Literal["running", "completed", "error"]
     sources: list[dict[str, str]] = Field(default_factory=list)
     images: list[dict[str, str]] = Field(default_factory=list)
+    retrieval_result: str | None = None
 
 
 class MessageResponse(BaseModel):
@@ -312,6 +313,9 @@ def _tool_activities(events: list[dict[str, Any]]) -> list[ToolActivity]:
             }
             if isinstance(completed_arguments, dict) and completed_arguments:
                 update["arguments"] = completed_arguments
+            retrieval_result = payload.get("retrieval_result")
+            if tool_name == "retrieve_documents" and isinstance(retrieval_result, str):
+                update["retrieval_result"] = retrieval_result
             sources = payload.get("sources")
             if isinstance(sources, list):
                 update["sources"] = [

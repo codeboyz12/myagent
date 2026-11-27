@@ -568,5 +568,11 @@ class SessionManager:
                         "result_bytes": len(encoded_result),
                         "sources": citations,
                         "images": images,
+                        **(
+                            {"retrieval_result": result.result[:6000]}
+                            if result.tool_name == "retrieve_documents"
+                            and isinstance(result.result, str)
+                            else {}
+                        ),
                     },
                 )
