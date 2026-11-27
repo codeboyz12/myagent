@@ -3,12 +3,13 @@ import {
   createUIMessageStreamResponse,
 } from "ai";
 import type { ToolActivity } from "@/lib/chat-shape";
+import { randomUUID } from "@/lib/uuid";
 
 export function completedAnswerStream(
   answer: string,
   toolEvents: ToolActivity[] = [],
 ): Response {
-  const partId = crypto.randomUUID();
+  const partId = randomUUID();
   const stream = createUIMessageStream({
     execute({ writer }) {
       writer.write({ type: "start" });

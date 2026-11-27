@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import type { ModelControl } from "@/lib/chat-shape";
+import { randomUUID } from "@/lib/uuid";
 
 type ModelControlEditorProps = {
   controls: ModelControl[];
@@ -12,7 +13,7 @@ type ModelControlEditorProps = {
 
 function createControl(): ModelControl {
   return {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     name: "",
     parameter: "",
     options: [{ label: "Default", value: "default" }],

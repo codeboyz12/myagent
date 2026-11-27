@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -18,7 +19,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogHeader } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -27,6 +28,7 @@ import { ThemeToggle } from "@/components/workspace/theme-toggle";
 import { areModelControlsValid, ModelControlEditor } from "@/components/workspace/model-control-editor";
 import { handleTabListKeyDown } from "@/lib/tab-keyboard";
 import type { ModelControl, ModelProvider } from "@/lib/chat-shape";
+import { randomUUID } from "@/lib/uuid";
 
 const AgentLibrarySettings = dynamic(
   () => import("@/components/workspace/agent-library-settings").then((module) => module.AgentLibrarySettings),
@@ -265,7 +267,7 @@ export function UserSettingsPage({
   const editingProvider = providers.find((provider) => provider.id === editingProviderId);
 
   function defaultControls(): ModelControl[] {
-    return [{ id: crypto.randomUUID(), name: "Thinking", parameter: "reasoning_effort", options: [{ label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" }], default_value: null }];
+    return [{ id: randomUUID(), name: "Thinking", parameter: "reasoning_effort", options: [{ label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" }], default_value: null }];
   }
 
   function addProvider() {
@@ -535,66 +537,75 @@ export function UserSettingsPage({
                 </AlertDialogContent>
               </AlertDialog>
 
-              <Dialog open={formOpen} onOpenChange={setFormOpen}>
-                <DialogContent className="provider-dialog w-[min(560px,calc(100vw-2rem))] max-w-[min(560px,calc(100vw-2rem))] max-h-[min(760px,calc(100dvh-2rem))] overflow-y-auto **:data-[slot=field-description]:text-[10px] border-border bg-background text-foreground shadow-xl **:data-[slot=dialog-title]:text-foreground **:data-[slot=dialog-description]:text-muted-foreground **:data-[slot=field-description]:text-muted-foreground **:data-[slot=field-label]:text-muted-foreground **:data-[slot=field-label]:text-[12px] **:data-[slot=input]:border-input **:data-[slot=input]:bg-background **:data-[slot=input]:text-foreground [&_[data-slot=input]::placeholder]:text-muted-foreground **:data-[slot=alert]:border-destructive/30 **:data-[slot=alert]:bg-destructive/10">
-                  <DialogHeader>
-                    <DialogTitle>{editingProviderId ? "Manage connection" : "Add a connection"}</DialogTitle>
-                    <DialogDescription>Connect any OpenAI-compatible provider, including Ollama and llama.cpp.</DialogDescription>
-                  </DialogHeader>
-                  <section className="flex flex-col gap-4 mt-6 p-4.5 border border-border in-[.provider-dialog]:m-0 in-[.provider-dialog]:p-0 in-[.provider-dialog]:border-0 in-[.provider-dialog]:bg-transparent max-[760px]:p-3.5 rounded-xl bg-muted" aria-label="Provider connection details">
-                  <FieldGroup className="gap-3.25 [&_select]:w-full [&_select]:h-9 [&_select]:p-[0_10px] [&_select]:border [&_select]:border-border [&_select]:rounded-md [&_select]:font-[inherit] [&_select]:text-[12px] [&_select]:bg-background [&_select]:text-foreground">
-                    <Field>
-                      <FieldLabel htmlFor="provider-type">Connection type</FieldLabel>
-                      <select
-                        id="provider-type"
-                        value={connectionType}
-                        onChange={(event) => {
-                          const nextType = event.target.value;
-                          setConnectionType(nextType);
-                          const preset = CONNECTION_PRESETS.find((item) => item.id === nextType);
-                          if (preset) {
-                            setProviderName(preset.name);
-                            setBaseUrl(preset.baseUrl);
-                          } else {
-                            setProviderName("");
-                          }
-                        }}
-                      >
-                        {CONNECTION_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-                        <option value={CUSTOM_CONNECTION}>Custom OpenAI-compatible API</option>
-                      </select>
-                      {connectionType === CUSTOM_CONNECTION && (
-                        <>
-                          <FieldLabel htmlFor="provider-name">Connection name</FieldLabel>
-                          <Input id="provider-name" value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="My server" />
-                        </>
+              {formOpen && createPortal(
+                <>
+                  <div className="fixed inset-0 z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs" onClick={() => { if (!busy) setFormOpen(false); }} />
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={editingProviderId ? "Manage connection" : "Add a connection"}
+                    className="provider-dialog fixed top-1/2 left-1/2 z-50 w-[min(560px,calc(100vw-2rem))] max-w-[min(560px,calc(100vw-2rem))] max-h-[min(760px,calc(100dvh-2rem))] overflow-y-auto -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-background p-4 text-sm text-foreground shadow-xl ring-1 ring-foreground/10 **:data-[slot=field-description]:text-[10px] **:data-[slot=field-description]:text-muted-foreground **:data-[slot=field-label]:text-muted-foreground **:data-[slot=field-label]:text-[12px] **:data-[slot=input]:border-input **:data-[slot=input]:bg-background **:data-[slot=input]:text-foreground [&_[data-slot=input]::placeholder]:text-muted-foreground **:data-[slot=alert]:border-destructive/30 **:data-[slot=alert]:bg-destructive/10"
+                  >
+                    <DialogHeader>
+                      <h2 data-slot="dialog-title" className="font-heading text-base leading-none font-medium text-foreground">{editingProviderId ? "Manage connection" : "Add a connection"}</h2>
+                      <p data-slot="dialog-description" className="text-sm text-muted-foreground">Connect any OpenAI-compatible provider, including Ollama and llama.cpp.</p>
+                    </DialogHeader>
+                    <section className="flex flex-col gap-4 mt-6 p-4.5 border border-border in-[.provider-dialog]:m-0 in-[.provider-dialog]:p-0 in-[.provider-dialog]:border-0 in-[.provider-dialog]:bg-transparent max-[760px]:p-3.5 rounded-xl bg-muted" aria-label="Provider connection details">
+                      <FieldGroup className="gap-3.25 [&_select]:w-full [&_select]:h-9 [&_select]:p-[0_10px] [&_select]:border [&_select]:border-border [&_select]:rounded-md [&_select]:font-[inherit] [&_select]:text-[12px] [&_select]:bg-background [&_select]:text-foreground">
+                        <Field>
+                          <FieldLabel htmlFor="provider-type">Connection type</FieldLabel>
+                          <select
+                            id="provider-type"
+                            value={connectionType}
+                            onChange={(event) => {
+                              const nextType = event.target.value;
+                              setConnectionType(nextType);
+                              const preset = CONNECTION_PRESETS.find((item) => item.id === nextType);
+                              if (preset) {
+                                setProviderName(preset.name);
+                                setBaseUrl(preset.baseUrl);
+                              } else {
+                                setProviderName("");
+                              }
+                            }}
+                          >
+                            {CONNECTION_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                            <option value={CUSTOM_CONNECTION}>Custom OpenAI-compatible API</option>
+                          </select>
+                          {connectionType === CUSTOM_CONNECTION && (
+                            <>
+                              <FieldLabel htmlFor="provider-name">Connection name</FieldLabel>
+                              <Input id="provider-name" value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="My server" />
+                            </>
+                          )}
+                        </Field>
+                        <Field><FieldLabel htmlFor="model-endpoint">API base URL</FieldLabel><Input id="model-endpoint" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="url" spellCheck={false} /><FieldDescription>For local servers, enter a URL such as http://localhost:8080/v1.</FieldDescription></Field>
+                        <Field>
+                          <FieldLabel htmlFor="model-api-key">API key</FieldLabel>
+                          <Input id="model-api-key" type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearApiKey(false); }} placeholder={editingProvider?.api_key_configured ? "Saved key · leave blank to keep" : "Optional for local servers"} autoComplete="new-password" />
+                          <FieldDescription>{editingProvider?.api_key_configured ? "Enter a new key to replace the saved one. Saved keys are encrypted." : "Your provider may require a key. It is encrypted before being saved."}</FieldDescription>
+                        </Field>
+                      </FieldGroup>
+                      {editingProvider?.api_key_configured && <label className="flex items-center gap-2 text-[12px] text-muted-foreground"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} /><span>Remove the saved API key</span></label>}
+                      <Button type="button" variant="outline" className="[.provider-dialog_[data-slot=button]:not(.settings-primary):not(&)]:text-muted-foreground [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-background [.provider-dialog_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-accent [.user-settings-page_[data-slot=button]&:hover]:bg-accent self-start" disabled={busy || !baseUrl.trim()} onClick={() => void discoverModels()}>{busyAction === "discover" ? "Checking connection…" : "Load models"}</Button>
+                      {models.length > 0 && (
+                        <FieldGroup className="[&_select]:w-full [&_select]:h-9 [&_select]:p-[0_10px] [&_select]:border [&_select]:border-border [&_select]:rounded-md [&_select]:font-[inherit] [&_select]:text-[12px] [&_select]:bg-background [&_select]:text-foreground grid-cols-[1.4fr_1fr] gap-3">
+                          <Field><FieldLabel htmlFor="default-model">Model</FieldLabel><select id="default-model" value={modelId} onChange={(event) => { const nextModel = event.target.value; setModelId(nextModel); setModelControls(editingProvider?.model_controls[nextModel] ?? defaultControls()); }}>{models.map((model) => <option key={model.id} value={model.id}>{model.alias || model.name || model.id}</option>)}</select></Field>
+                          <ModelControlEditor controls={modelControls} onChange={setModelControls} />
+                        </FieldGroup>
                       )}
-                    </Field>
-                    <Field><FieldLabel htmlFor="model-endpoint">API base URL</FieldLabel><Input id="model-endpoint" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" autoComplete="url" spellCheck={false} /><FieldDescription>For local servers, enter a URL such as http://localhost:8080/v1.</FieldDescription></Field>
-                    <Field>
-                      <FieldLabel htmlFor="model-api-key">API key</FieldLabel>
-                      <Input id="model-api-key" type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearApiKey(false); }} placeholder={editingProvider?.api_key_configured ? "Saved key · leave blank to keep" : "Optional for local servers"} autoComplete="new-password" />
-                      <FieldDescription>{editingProvider?.api_key_configured ? "Enter a new key to replace the saved one. Saved keys are encrypted." : "Your provider may require a key. It is encrypted before being saved."}</FieldDescription>
-                    </Field>
-                  </FieldGroup>
-                  {editingProvider?.api_key_configured && <label className="flex items-center gap-2 text-[12px] text-muted-foreground"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} /><span>Remove the saved API key</span></label>}
-                  <Button type="button" variant="outline" className="[.provider-dialog_[data-slot=button]:not(.settings-primary):not(&)]:text-muted-foreground [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-background [.provider-dialog_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-accent [.user-settings-page_[data-slot=button]&:hover]:bg-accent self-start" disabled={busy || !baseUrl.trim()} onClick={() => void discoverModels()}>{busyAction === "discover" ? "Checking connection…" : "Load models"}</Button>
-                  {models.length > 0 && (
-                    <FieldGroup className="[&_select]:w-full [&_select]:h-9 [&_select]:p-[0_10px] [&_select]:border [&_select]:border-border [&_select]:rounded-md [&_select]:font-[inherit] [&_select]:text-[12px] [&_select]:bg-background [&_select]:text-foreground grid-cols-[1.4fr_1fr] gap-3">
-                      <Field><FieldLabel htmlFor="default-model">Model</FieldLabel><select id="default-model" value={modelId} onChange={(event) => { const nextModel = event.target.value; setModelId(nextModel); setModelControls(editingProvider?.model_controls[nextModel] ?? defaultControls()); }}>{models.map((model) => <option key={model.id} value={model.id}>{model.alias || model.name || model.id}</option>)}</select></Field>
-                      <ModelControlEditor controls={modelControls} onChange={setModelControls} />
-                    </FieldGroup>
-                  )}
-                  {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-                    <div className="flex justify-end gap-2 pt-1">
-                      <Button type="button" variant="outline" className="[.provider-dialog_[data-slot=button]:not(.settings-primary):not(&)]:text-muted-foreground [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-background [.provider-dialog_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-accent [.user-settings-page_[data-slot=button]&:hover]:bg-accent" disabled={busy} onClick={() => setFormOpen(false)}>Cancel</Button>
-                      <Button type="button" className="settings-primary [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-primary [.provider-dialog_[data-slot=button]&]:text-primary-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-primary [.user-settings-page_[data-slot=button]&]:text-primary-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-primary [.user-settings-page_[data-slot=button]&:hover]:bg-primary disabled:opacity-100 [.provider-dialog_[data-slot=button]&:disabled]:bg-muted [.provider-dialog_[data-slot=button]&:disabled]:text-foreground" disabled={busy || !providerName.trim() || !baseUrl.trim() || !modelId || models.length === 0 || !areModelControlsValid(modelControls)} onClick={() => void saveProvider()}>
-                        {busyAction === "save" ? "Saving connection…" : "Save connection"}
-                      </Button>
-                    </div>
-                  </section>
-                </DialogContent>
-              </Dialog>
+                      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+                      <div className="flex justify-end gap-2 pt-1">
+                        <Button type="button" variant="outline" className="[.provider-dialog_[data-slot=button]:not(.settings-primary):not(&)]:text-muted-foreground [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-background [.provider-dialog_[data-slot=button]&]:text-muted-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-background [.user-settings-page_[data-slot=button]&]:text-muted-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-accent [.user-settings-page_[data-slot=button]&:hover]:bg-accent" disabled={busy} onClick={() => setFormOpen(false)}>Cancel</Button>
+                        <Button type="button" className="settings-primary [.provider-dialog_[data-slot=button]&]:border-border [.provider-dialog_[data-slot=button]&]:bg-primary [.provider-dialog_[data-slot=button]&]:text-primary-foreground [.user-settings-page_[data-slot=button]&]:border-border [.user-settings-page_[data-slot=button]&]:bg-primary [.user-settings-page_[data-slot=button]&]:text-primary-foreground [.provider-dialog_[data-slot=button]&:hover]:bg-primary [.user-settings-page_[data-slot=button]&:hover]:bg-primary disabled:opacity-100 [.provider-dialog_[data-slot=button]&:disabled]:bg-muted [.provider-dialog_[data-slot=button]&:disabled]:text-foreground" disabled={busy || !providerName.trim() || !baseUrl.trim() || !modelId || models.length === 0 || !areModelControlsValid(modelControls)} onClick={() => void saveProvider()}>
+                          {busyAction === "save" ? "Saving connection…" : "Save connection"}
+                        </Button>
+                      </div>
+                    </section>
+                  </div>
+                </>,
+                document.body
+              )}
               {error && !formOpen && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
             </section>
           ) : section === "agent-library" ? (

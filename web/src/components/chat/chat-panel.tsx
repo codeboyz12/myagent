@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useModelSettings } from "@/hooks/use-model-settings";
 import { ModelSettingsControls } from "./model-settings-controls";
+import { randomUUID } from "@/lib/uuid";
 
 export { ChatWelcome } from "./chat-welcome";
 
@@ -89,7 +90,7 @@ function SessionChat({ sessionId }: { sessionId: string }) {
             body: {
               sessionId: id,
               content: getMessageText(latest),
-              messageId: trigger === "regenerate-message" ? crypto.randomUUID() : latest?.id,
+              messageId: trigger === "regenerate-message" ? randomUUID() : latest?.id,
               regeneratePrevious: trigger === "regenerate-message",
               modelId: requestSettings.current.modelId,
               reasoningEffort: requestSettings.current.effort,

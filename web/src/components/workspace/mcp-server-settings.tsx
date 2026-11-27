@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { randomUUID } from "@/lib/uuid";
 
 type Server = {
   id: string; name: string; transport: "http"; url: string; enabled: boolean;
@@ -94,7 +95,7 @@ export function MCPServerSettings() {
   function submitDraft(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft) return;
-    const id = draft.id || "mcp-" + crypto.randomUUID();
+    const id = draft.id || "mcp-" + randomUUID();
     const next = { ...settings, servers: settings.servers.some((server) => server.id === id)
       ? settings.servers.map((server) => server.id === id ? { ...draft, id } : server)
       : [...settings.servers, { ...draft, id }] };

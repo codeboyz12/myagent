@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { handleTabListKeyDown } from "@/lib/tab-keyboard";
+import { randomUUID } from "@/lib/uuid";
 
 type Item = { id: string; name: string; description: string; content: string; enabled: boolean; built_in: boolean };
 type Library = { skills: Item[]; personas: Item[] };
@@ -99,7 +100,7 @@ export function AgentLibrarySettings() {
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-    {editing && <form className="grid gap-3 p-4 border border-border [&_h3]:m-0 [&_h3]:text-[13px] [&_textarea]:w-full [&_textarea]:p-[9px_10px] [&_textarea]:border [&_textarea]:border-border [&_textarea]:rounded-md [&_textarea]:font-[inherit] [&_textarea]:text-[12px] [&_textarea]:resize-y rounded-xl bg-muted [&_textarea]:bg-background [&_textarea]:text-foreground" onSubmit={(event) => { event.preventDefault(); update({ ...editing, id: editing.id || `${kind === "skills" ? "skill" : "persona"}-${crypto.randomUUID()}` }); }}>
+    {editing && <form className="grid gap-3 p-4 border border-border [&_h3]:m-0 [&_h3]:text-[13px] [&_textarea]:w-full [&_textarea]:p-[9px_10px] [&_textarea]:border [&_textarea]:border-border [&_textarea]:rounded-md [&_textarea]:font-[inherit] [&_textarea]:text-[12px] [&_textarea]:resize-y rounded-xl bg-muted [&_textarea]:bg-background [&_textarea]:text-foreground" onSubmit={(event) => { event.preventDefault(); update({ ...editing, id: editing.id || `${kind === "skills" ? "skill" : "persona"}-${randomUUID()}` }); }}>
       <h3>{editing.id ? `Edit ${kind === "skills" ? "skill" : "persona"}` : `Add ${kind === "skills" ? "skill" : "persona"}`}</h3>
       <Field><FieldLabel htmlFor="library-name">Name</FieldLabel><Input id="library-name" required maxLength={80} value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></Field>
       <Field><FieldLabel htmlFor="library-description">Description</FieldLabel><Input id="library-description" maxLength={500} value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></Field>
