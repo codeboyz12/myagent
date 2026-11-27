@@ -89,7 +89,7 @@ export async function setAccessTokenCookie(
 ): Promise<void> {
   (await cookies()).set(ACCESS_TOKEN_COOKIE, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.COOKIE_SECURE === "true",
     sameSite: "lax",
     path: "/",
     maxAge: expiresIn,

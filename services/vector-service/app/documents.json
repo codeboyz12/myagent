@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "text": "รองเท้า Runner A ราคา 1290 บาท รองเท้าวิ่งน้ำหนักเบา ระบายอากาศดี เหมาะสำหรับวิ่งและออกกำลังกาย",
+    "metadata": {
+      "product_id": "runner-a",
+      "name": "Runner A",
+      "price": 1290,
+      "category": "รองเท้าวิ่ง",
+      "source": "sample-products"
+    }
+  },
+  {
+    "id": 2,
+    "text": "รองเท้า Office B ราคา 1890 บาท รองเท้าหนังสีดำ ทรงสุภาพ เหมาะสำหรับใส่ทำงานและประชุม",
+    "metadata": {
+      "product_id": "office-b",
+      "name": "Office B",
+      "price": 1890,
+      "category": "รองเท้าทำงาน",
+      "source": "sample-products"
+    }
+  },
+  {
+    "id": 3,
+    "text": "รองเท้า Trail C ราคา 2490 บาท รองเท้าเดินป่า พื้นยึดเกาะดี เหมาะกับทางดินและกิจกรรมกลางแจ้ง",
+    "metadata": {
+      "product_id": "trail-c",
+      "name": "Trail C",
+      "price": 2490,
+      "category": "รองเท้าเดินป่า",
+      "source": "sample-products"
+    }
+  }
+]

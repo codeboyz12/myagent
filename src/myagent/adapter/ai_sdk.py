@@ -49,6 +49,7 @@ class ModelCatalogAuthenticationError(RuntimeError):
 def _fetch_model_catalog(base_url: str, api_key: str | None) -> list[dict[str, str]]:
     """Fetch model IDs and display names from an OpenAI-compatible /models API."""
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers["User-Agent"] = "myagent/0.1"
     request = Request(f"{base_url.rstrip('/')}/models", headers=headers)
     try:
         with urlopen(request, timeout=10) as response:

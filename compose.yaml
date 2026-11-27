@@ -1,0 +1,52 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.1
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  vector-service:
+    build: services/vector-service
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      HF_HOME: /models
+    volumes:
+      - model_cache:/models
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: myagent-api
+    env_file: .env
+    environment:
+      VECTOR_SERVICE_URL: http://vector-service:8000
+      MYAGENT_API_HOST: 0.0.0.0
+      MYAGENT_API_PORT: 5000
+      MYAGENT_SIGNUP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - agent_data:/root/.myagent
+    depends_on:
+      - vector-service
+    restart: unless-stopped
+
+  web:
+    build: web
+    environment:
+      MYAGENT_API_URL: http://api:5000
+      COOKIE_SECURE: "false"
+    ports:
+      - "0.0.0.0:3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+  model_cache:
+  agent_data:

@@ -16,6 +16,7 @@ from myagent.tools.persona import update_persona as _update_persona
 from myagent.tools.skills import list_skills as _list_skills
 from myagent.tools.skills import load_skill as _load_skill
 from myagent.tools.mcp import MCPServerConfig, build_mcp_tools
+from myagent.tools.retriever import retrieve_documents as _retrieve_documents
 
 
 def _run_tool(function: Callable[..., Any], **arguments: Any) -> str:
@@ -95,6 +96,16 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
         )
 
     @ai.tool
+    async def retrieve_documents(query: str, top_k: int = 3, score_threshold: float | None = None) -> str:
+        """Search for relevant documents from the vector store using semantic similarity."""
+        return _run_tool(
+            _retrieve_documents,
+            query=query,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
+
+    @ai.tool
     async def update_persona(
         persona_id: str,
         field: Literal[
@@ -125,6 +136,7 @@ def get_agent_tools(context: ToolContext) -> list[ai.AgentTool]:
         read_file,
         list_skills,
         load_skill,
+        retrieve_documents,
         get_persona,
         list_personas,
         update_persona,

@@ -2373,7 +2373,7 @@ def create_app(
                                 reasoning_effort=reasoning_effort,
                                 provider_params=provider_params,
                                 base_system_instruction=SYSTEM_PROMPT,
-                                system_instruction=OPENUI_SYSTEM_PROMPT,
+                                system_instruction=None,
                                 chatgpt_plan=uses_chatgpt_plan,
                                 on_event=on_event,
                                 on_usage=capture_usage,
